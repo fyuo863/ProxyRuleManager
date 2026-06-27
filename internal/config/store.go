@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"proxy-rule-manager/internal/model"
+	"proxy-rule-manager/internal/prmfs"
 )
 
 type Store struct {
@@ -34,6 +36,17 @@ func defaultConfig() model.AppConfig {
 		PacListenAddr:          "127.0.0.1:18088",
 		ProxyListenAddr:        "127.0.0.1:18089",
 		FastLinkProxyAddr:      "127.0.0.1:7892",
+		FastLinkProxyType:      "http",
+		ProxyInterfaceName:     "",
+		ProxyGuardEnabled:      false,
+		ProxyGuardInterface:    "",
+		ProxyGuardProgramPaths: []string{},
+		DirectInterfaceName:    "",
+		TunInterfaceName:       "ProxyRuleManagerTun",
+		TunAddressCIDR:         "172.19.0.1/30",
+		TunMTU:                 1500,
+		TunIncludedApps:        []string{"Codex.exe"},
+		AutoStartTunService:    false,
 		AutoStartPacService:    false,
 		AutoStartProxyService:  false,
 		AutoEnableSystemPac:    false,
@@ -44,23 +57,31 @@ func defaultConfig() model.AppConfig {
 }
 
 func configPath() (string, error) {
-	root, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(root, "ProxyRuleManager", "config.json"), nil
+	return prmfs.ConfigPath()
 }
 
 func NewStore() (*Store, error) {
+	if err := prmfs.EnsureLayout(); err != nil {
+		return nil, err
+	}
 	path, err := configPath()
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{path: path, cfg: defaultConfig()}
-	if err := s.Load(); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := migrateLegacyConfig(path); err != nil {
 		return nil, err
 	}
+	s := &Store{path: path, cfg: defaultConfig()}
+	loadErr := s.Load()
+	if loadErr != nil && !errors.Is(loadErr, os.ErrNotExist) {
+		return nil, loadErr
+	}
 	s.ensureInvariants()
+	if errors.Is(loadErr, os.ErrNotExist) {
+		if err := s.Save(); err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
 }
 
@@ -77,6 +98,30 @@ func (s *Store) ensureInvariants() {
 	}
 	if s.cfg.FastLinkProxyAddr == "" {
 		s.cfg.FastLinkProxyAddr = "127.0.0.1:7892"
+	}
+	if s.cfg.FastLinkProxyType == "" {
+		s.cfg.FastLinkProxyType = "http"
+	}
+	if s.cfg.ProxyInterfaceName == "" {
+		s.cfg.ProxyInterfaceName = ""
+	}
+	if s.cfg.ProxyGuardInterface == "" {
+		s.cfg.ProxyGuardInterface = ""
+	}
+	if s.cfg.ProxyGuardProgramPaths == nil {
+		s.cfg.ProxyGuardProgramPaths = []string{}
+	}
+	if s.cfg.TunInterfaceName == "" {
+		s.cfg.TunInterfaceName = "ProxyRuleManagerTun"
+	}
+	if s.cfg.TunAddressCIDR == "" {
+		s.cfg.TunAddressCIDR = "172.19.0.1/30"
+	}
+	if s.cfg.TunMTU <= 0 {
+		s.cfg.TunMTU = 1500
+	}
+	if s.cfg.TunIncludedApps == nil {
+		s.cfg.TunIncludedApps = []string{"Codex.exe"}
 	}
 	if s.cfg.MaxLogEntries <= 0 {
 		s.cfg.MaxLogEntries = 500
@@ -163,4 +208,43 @@ func (s *Store) Replace(cfg model.AppConfig) error {
 	s.cfg = cfg
 	s.ensureInvariants()
 	return nil
+}
+
+func migrateLegacyConfig(targetPath string) error {
+	if _, err := os.Stat(targetPath); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	legacyPath, err := prmfs.LegacyConfigPath()
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(legacyPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return err
+	}
+	src, err := os.Open(legacyPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	dst, err := os.Create(targetPath)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return err
+	}
+	return dst.Close()
 }

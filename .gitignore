@@ -1,3 +1,88 @@
+# ----------------------------
+# Generated .gitignore
+# Covers: Go builds, Node/Vite, Wails builds, Windows, IDEs, temp files
+# ----------------------------
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+*.iml
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+/.parcel-cache/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build artifacts / binaries
+/build/
+/build/**
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.o
+*.a
+
+# Go specific
+# Ignore object files and build output
+*.test
+_obj/
+pkg/
+
+# Coverage
+coverage.out
+*.coverprofile
+
+# Logs and runtime files
+*.log
+*.log.*
+logs/*.log
+
+# Environment
+.env
+.env.*.local
+
+# Temporary files
+*~
+*.tmp
+*.temp
+*.bak
+
+# Mac/Windows lock files
+.DS_Store?
+desktop.ini
+
+# VS Code workspace storage
+.history/
+.cache/
+
+# Ignore credentials and secrets (uncomment if used)
+# .env.local
+# secrets/
+
+# End of .gitignore
 frontend/node_modules/
 frontend/dist/assets/
 build/
+wintun.dll

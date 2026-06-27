@@ -1,4 +1,4 @@
-//go:build !bindings
+//go:build bindings
 
 package main
 
@@ -10,8 +10,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
 
-//go:embed all:frontend/dist
-var assets embed.FS
+var bindingsAssets embed.FS
 
 func main() {
 	app := NewApp()
@@ -26,7 +25,7 @@ func main() {
 		MaxHeight:     490,
 		DisableResize: true,
 		AssetServer: &assetserver.Options{
-			Assets: assets,
+			Assets: bindingsAssets,
 		},
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,

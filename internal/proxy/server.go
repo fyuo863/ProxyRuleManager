@@ -100,6 +100,7 @@ func (s *Server) handleForwardHTTP(w http.ResponseWriter, r *http.Request) {
 	logEntry := model.TrafficLog{
 		ID:               uuid.NewString(),
 		Time:             time.Now().Format(time.RFC3339),
+		Source:           "web",
 		Host:             host,
 		Port:             port,
 		Protocol:         "HTTP",
@@ -163,6 +164,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	logEntry := model.TrafficLog{
 		ID:               uuid.NewString(),
 		Time:             time.Now().Format(time.RFC3339),
+		Source:           "web",
 		Host:             host,
 		Port:             port,
 		Protocol:         "HTTPS CONNECT",
@@ -318,7 +320,7 @@ func splitHostPort(hostPort string) (string, string) {
 func describePath(target model.RuleTarget, fastLinkAddr string) string {
 	switch target {
 	case model.RuleTargetProxy:
-		return fmt.Sprintf("本程序 -> FastLink %s -> Wi-Fi", fastLinkAddr)
+		return fmt.Sprintf("本程序 -> 上游代理 %s -> 实际出口由代理程序或系统路由决定", fastLinkAddr)
 	case model.RuleTargetReject:
 		return "本程序拒绝连接"
 	default:

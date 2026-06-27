@@ -22,8 +22,16 @@ export function EnableSystemPac() {
   return window['go']['main']['App']['EnableSystemPac']();
 }
 
+export function ExportAgentDiagnostics() {
+  return window['go']['main']['App']['ExportAgentDiagnostics']();
+}
+
 export function ExportConfig() {
   return window['go']['main']['App']['ExportConfig']();
+}
+
+export function GetAgentDiagnostics() {
+  return window['go']['main']['App']['GetAgentDiagnostics']();
 }
 
 export function GetState() {
@@ -42,6 +50,10 @@ export function OpenConfigLocation() {
   return window['go']['main']['App']['OpenConfigLocation']();
 }
 
+export function OpenDataDirectory() {
+  return window['go']['main']['App']['OpenDataDirectory']();
+}
+
 export function RefreshStatus() {
   return window['go']['main']['App']['RefreshStatus']();
 }
@@ -58,12 +70,20 @@ export function StartProxyService() {
   return window['go']['main']['App']['StartProxyService']();
 }
 
+export function StartTunService() {
+  return window['go']['main']['App']['StartTunService']();
+}
+
 export function StopPacService() {
   return window['go']['main']['App']['StopPacService']();
 }
 
 export function StopProxyService() {
   return window['go']['main']['App']['StopProxyService']();
+}
+
+export function StopTunService() {
+  return window['go']['main']['App']['StopTunService']();
 }
 
 export function UpsertRule(arg1) {

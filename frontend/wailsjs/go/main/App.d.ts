@@ -12,7 +12,11 @@ export function DisableSystemPac():Promise<void>;
 
 export function EnableSystemPac():Promise<void>;
 
+export function ExportAgentDiagnostics():Promise<string>;
+
 export function ExportConfig():Promise<void>;
+
+export function GetAgentDiagnostics():Promise<model.AgentDiagnostics>;
 
 export function GetState():Promise<model.AppState>;
 
@@ -22,6 +26,8 @@ export function MoveRule(arg1:string,arg2:string):Promise<model.AppState>;
 
 export function OpenConfigLocation():Promise<void>;
 
+export function OpenDataDirectory():Promise<void>;
+
 export function RefreshStatus():Promise<model.AppState>;
 
 export function SaveSettings(arg1:model.AppConfig):Promise<model.AppState>;
@@ -30,8 +36,12 @@ export function StartPacService():Promise<void>;
 
 export function StartProxyService():Promise<void>;
 
+export function StartTunService():Promise<void>;
+
 export function StopPacService():Promise<void>;
 
 export function StopProxyService():Promise<void>;
+
+export function StopTunService():Promise<void>;
 
 export function UpsertRule(arg1:model.Rule):Promise<model.AppState>;

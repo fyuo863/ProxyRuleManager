@@ -12,12 +12,17 @@ import (
 	"github.com/google/uuid"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"proxy-rule-manager/internal/appmonitor"
 	"proxy-rule-manager/internal/config"
 	"proxy-rule-manager/internal/logs"
 	"proxy-rule-manager/internal/model"
+	"proxy-rule-manager/internal/netadapter"
 	"proxy-rule-manager/internal/pac"
+	"proxy-rule-manager/internal/prmfs"
 	"proxy-rule-manager/internal/proxy"
+	"proxy-rule-manager/internal/proxyguard"
 	"proxy-rule-manager/internal/rules"
+	"proxy-rule-manager/internal/tun"
 	"proxy-rule-manager/internal/winproxy"
 )
 
@@ -28,13 +33,23 @@ type App struct {
 	logStore     *logs.Store
 	pacServer    *pac.Server
 	proxySrv     *proxy.Server
+	appMonitor   appmonitor.Service
+	proxyGuard   proxyguard.Service
+	tunService   tun.Service
+	adaptersSeen []model.NetworkAdapterOption
+	adaptersAt   time.Time
 	pacRunning   bool
 	proxyRunning bool
+	tunRunning   bool
 	lastError    string
 }
 
 func NewApp() *App {
-	return &App{ruleEngine: rules.NewEngine()}
+	return &App{
+		ruleEngine: rules.NewEngine(),
+		proxyGuard: proxyguard.NewService(),
+		tunService: tun.NewService(),
+	}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -47,7 +62,12 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.config = store
 	a.logStore = logs.NewStore(store.Get().MaxLogEntries)
+	a.appMonitor = appmonitor.NewService(a.addLog, a.updateLog, a.managedAppRouteHint)
 	a.rebuildServices()
+	a.appMonitor.Start(store.Get().TunIncludedApps)
+	if err := a.reconcileProxyGuard(store.Get()); err != nil {
+		a.lastError = err.Error()
+	}
 
 	cfg := a.config.Get()
 	if cfg.AutoStartPacService {
@@ -64,6 +84,9 @@ func (a *App) startup(ctx context.Context) {
 			_ = a.StartProxyService()
 		}
 		_ = a.EnableSystemPac()
+	}
+	if cfg.AutoStartTunService {
+		_ = a.StartTunService()
 	}
 }
 
@@ -93,8 +116,15 @@ func (a *App) stopServers() {
 	if a.proxySrv != nil {
 		_ = a.proxySrv.Stop(ctx)
 	}
+	if a.tunService != nil {
+		_ = a.tunService.Stop()
+	}
+	if a.appMonitor != nil {
+		a.appMonitor.Stop()
+	}
 	a.pacRunning = false
 	a.proxyRunning = false
+	a.tunRunning = false
 }
 
 func (a *App) matchRule(host string) (model.Rule, model.MatchedRule) {
@@ -119,6 +149,10 @@ func (a *App) emitState() {
 }
 
 func (a *App) GetState() model.AppState {
+	return a.getState(false)
+}
+
+func (a *App) getState(forceAdapters bool) model.AppState {
 	if a.config == nil {
 		return model.AppState{}
 	}
@@ -130,11 +164,11 @@ func (a *App) GetState() model.AppState {
 	}
 
 	fastLinkReachable := false
-	fastLinkMessage := "FastLink 代理端口不可用，请检查 FastLink 是否已连接"
+	fastLinkMessage := "上游代理端口不可用，请检查代理客户端或远端代理是否可达"
 	conn, dialErr := net.DialTimeout("tcp", cfg.FastLinkProxyAddr, 800*time.Millisecond)
 	if dialErr == nil {
 		fastLinkReachable = true
-		fastLinkMessage = "FastLink 本地代理可用"
+		fastLinkMessage = "上游代理端口可连接"
 		_ = conn.Close()
 	}
 
@@ -144,25 +178,59 @@ func (a *App) GetState() model.AppState {
 			enabledRules++
 		}
 	}
+	managedSnapshot := appmonitor.Snapshot{}
+	if a.appMonitor != nil {
+		managedSnapshot = a.appMonitor.Snapshot()
+	}
+	adapters := a.availableNetworkAdapters(forceAdapters)
+	proxyGuardStatus := model.ProxyGuardRuntimeStatus{Message: "代理进程出口限制未初始化"}
+	if a.proxyGuard != nil {
+		proxyGuardStatus = a.proxyGuard.Status()
+	}
+	tunStatus := a.tunService.Status(model.TunOptions{
+		InterfaceName:   cfg.TunInterfaceName,
+		AddressCIDR:     cfg.TunAddressCIDR,
+		MTU:             cfg.TunMTU,
+		IncludedApps:    cfg.TunIncludedApps,
+		FastLinkAddr:    cfg.FastLinkProxyAddr,
+		FastLinkType:    cfg.FastLinkProxyType,
+		ProxyInterface:  cfg.ProxyInterfaceName,
+		DirectInterface: cfg.DirectInterfaceName,
+		Rules:           cfg.Rules,
+	})
 
 	return model.AppState{
 		Config: cfg,
 		Status: model.ServiceStatus{
-			PacRunning:            a.pacRunning,
-			PacURL:                "http://" + cfg.PacListenAddr + "/proxy.pac",
-			ProxyRunning:          a.proxyRunning,
-			ProxyAddr:             cfg.ProxyListenAddr,
-			SystemPacEnabled:      currentProxyCfg.AutoConfigURL == "http://"+cfg.PacListenAddr+"/proxy.pac",
-			CurrentAutoConfigURL:  currentProxyCfg.AutoConfigURL,
-			FastLinkReachable:     fastLinkReachable,
-			FastLinkMessage:       fastLinkMessage,
-			RuleCount:             len(cfg.Rules),
-			EnabledRuleCount:      enabledRules,
-			ActiveConnectionCount: a.logStore.ActiveCount(),
-			RecentLogCount:        a.logStore.Count(),
-			LastError:             a.lastError,
+			PacRunning:             a.pacRunning,
+			PacURL:                 "http://" + cfg.PacListenAddr + "/proxy.pac",
+			ProxyRunning:           a.proxyRunning,
+			ProxyAddr:              cfg.ProxyListenAddr,
+			ProxyGuardApplied:      proxyGuardStatus.Applied,
+			ProxyGuardMessage:      proxyGuardStatus.Message,
+			ProxyGuardProgramCount: proxyGuardStatus.ProgramCount,
+			TunRunning:             a.tunRunning && tunStatus.Running,
+			TunAvailable:           tunStatus.Available,
+			TunMessage:             tunStatus.Message,
+			TunIncludedAppCount:    len(cfg.TunIncludedApps),
+			ManagedAppCount:        len(managedSnapshot.ManagedApps),
+			ManagedProcessCount:    managedSnapshot.ManagedProcessCount,
+			ManagedConnectionCount: managedSnapshot.ManagedConnectionCount,
+			TunPacketCount:         tunStatus.PacketCount,
+			TunByteCount:           tunStatus.ByteCount,
+			SystemPacEnabled:       currentProxyCfg.AutoConfigURL == "http://"+cfg.PacListenAddr+"/proxy.pac",
+			CurrentAutoConfigURL:   currentProxyCfg.AutoConfigURL,
+			FastLinkReachable:      fastLinkReachable,
+			FastLinkMessage:        fastLinkMessage,
+			RuleCount:              len(cfg.Rules),
+			EnabledRuleCount:       enabledRules,
+			ActiveConnectionCount:  a.logStore.ActiveCount(),
+			RecentLogCount:         a.logStore.Count(),
+			LastError:              a.lastError,
 		},
-		Logs: a.logStore.List(),
+		Logs:                     a.logStore.List(),
+		ManagedApps:              managedSnapshot.ManagedApps,
+		AvailableNetworkAdapters: adapters,
 	}
 }
 
@@ -236,6 +304,42 @@ func (a *App) StopProxyService() error {
 	return nil
 }
 
+func (a *App) StartTunService() error {
+	cfg := a.config.Get()
+	err := a.tunService.Start(model.TunOptions{
+		InterfaceName:   cfg.TunInterfaceName,
+		AddressCIDR:     cfg.TunAddressCIDR,
+		MTU:             cfg.TunMTU,
+		IncludedApps:    cfg.TunIncludedApps,
+		FastLinkAddr:    cfg.FastLinkProxyAddr,
+		FastLinkType:    cfg.FastLinkProxyType,
+		ProxyInterface:  cfg.ProxyInterfaceName,
+		DirectInterface: cfg.DirectInterfaceName,
+		Rules:           cfg.Rules,
+	})
+	if err != nil {
+		a.lastError = err.Error()
+		a.emitState()
+		return err
+	}
+	a.tunRunning = true
+	a.lastError = ""
+	a.emitState()
+	return nil
+}
+
+func (a *App) StopTunService() error {
+	if err := a.tunService.Stop(); err != nil {
+		a.lastError = err.Error()
+		a.emitState()
+		return err
+	}
+	a.tunRunning = false
+	a.lastError = ""
+	a.emitState()
+	return nil
+}
+
 func (a *App) EnableSystemPac() error {
 	cfg := a.config.Get()
 	if !a.pacRunning || !a.proxyRunning {
@@ -276,7 +380,7 @@ func (a *App) DisableSystemPac() error {
 }
 
 func (a *App) RefreshStatus() model.AppState {
-	return a.GetState()
+	return a.getState(true)
 }
 
 func (a *App) ClearLogs() model.AppState {
@@ -452,11 +556,23 @@ func (a *App) MoveRule(id string, direction string) (model.AppState, error) {
 func (a *App) SaveSettings(next model.AppConfig) (model.AppState, error) {
 	restartPac := a.pacRunning
 	restartProxy := a.proxyRunning
+	restartTun := a.tunRunning
 
 	err := a.config.Update(func(cfg *model.AppConfig) error {
 		cfg.PacListenAddr = next.PacListenAddr
 		cfg.ProxyListenAddr = next.ProxyListenAddr
 		cfg.FastLinkProxyAddr = next.FastLinkProxyAddr
+		cfg.FastLinkProxyType = next.FastLinkProxyType
+		cfg.ProxyInterfaceName = next.ProxyInterfaceName
+		cfg.ProxyGuardEnabled = next.ProxyGuardEnabled
+		cfg.ProxyGuardInterface = next.ProxyGuardInterface
+		cfg.ProxyGuardProgramPaths = next.ProxyGuardProgramPaths
+		cfg.DirectInterfaceName = next.DirectInterfaceName
+		cfg.TunInterfaceName = next.TunInterfaceName
+		cfg.TunAddressCIDR = next.TunAddressCIDR
+		cfg.TunMTU = next.TunMTU
+		cfg.TunIncludedApps = next.TunIncludedApps
+		cfg.AutoStartTunService = next.AutoStartTunService
 		cfg.AutoStartPacService = next.AutoStartPacService
 		cfg.AutoStartProxyService = next.AutoStartProxyService
 		cfg.AutoEnableSystemPac = next.AutoEnableSystemPac
@@ -470,12 +586,18 @@ func (a *App) SaveSettings(next model.AppConfig) (model.AppState, error) {
 	if err := a.config.Save(); err != nil {
 		return a.GetState(), err
 	}
+	if a.appMonitor != nil {
+		a.appMonitor.UpdateIncludedApps(next.TunIncludedApps)
+	}
 
 	if restartPac {
 		_ = a.StopPacService()
 	}
 	if restartProxy {
 		_ = a.StopProxyService()
+	}
+	if restartTun {
+		_ = a.StopTunService()
 	}
 	a.rebuildServices()
 	if restartPac {
@@ -488,7 +610,24 @@ func (a *App) SaveSettings(next model.AppConfig) (model.AppState, error) {
 			return a.GetState(), err
 		}
 	}
+	if restartTun {
+		if err := a.StartTunService(); err != nil {
+			return a.GetState(), err
+		}
+	}
+	if err := a.reconcileProxyGuard(a.config.Get()); err != nil {
+		a.lastError = err.Error()
+		return a.GetState(), err
+	}
+	a.lastError = ""
 	return a.GetState(), nil
+}
+
+func (a *App) managedAppRouteHint(processName, processPath string) (model.RuleTarget, string) {
+	if a.tunRunning {
+		return model.RuleTargetProxy, "已识别到目标进程；当前应用级透明接管已启用，匹配进程的 TCP 连接会被直接导入上游代理链"
+	}
+	return model.RuleTargetDirect, "进程级识别已启用；当前仅观测应用连接，透明接管尚未启动"
 }
 
 func (a *App) ExportConfig() error {
@@ -530,12 +669,48 @@ func (a *App) ImportConfig() (model.AppState, error) {
 		return a.GetState(), err
 	}
 	a.rebuildServices()
+	if err := a.reconcileProxyGuard(a.config.Get()); err != nil {
+		a.lastError = err.Error()
+		return a.GetState(), err
+	}
 	return a.GetState(), nil
+}
+
+func (a *App) reconcileProxyGuard(cfg model.AppConfig) error {
+	if a.proxyGuard == nil {
+		return nil
+	}
+	return a.proxyGuard.Reconcile(cfg)
+}
+
+func (a *App) availableNetworkAdapters(force bool) []model.NetworkAdapterOption {
+	const cacheTTL = 15 * time.Second
+	if !force && len(a.adaptersSeen) > 0 && time.Since(a.adaptersAt) < cacheTTL {
+		return append([]model.NetworkAdapterOption(nil), a.adaptersSeen...)
+	}
+
+	adapters, err := netadapter.List()
+	if err != nil {
+		return append([]model.NetworkAdapterOption(nil), a.adaptersSeen...)
+	}
+
+	a.adaptersSeen = adapters
+	a.adaptersAt = time.Now()
+	return append([]model.NetworkAdapterOption(nil), a.adaptersSeen...)
 }
 
 func (a *App) OpenConfigLocation() error {
 	path := a.config.Path()
 	wruntime.BrowserOpenURL(a.ctx, "file:///"+path)
+	return nil
+}
+
+func (a *App) OpenDataDirectory() error {
+	root, err := prmfs.RootDir()
+	if err != nil {
+		return err
+	}
+	wruntime.BrowserOpenURL(a.ctx, "file:///"+root)
 	return nil
 }
 

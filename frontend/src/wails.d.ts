@@ -37,9 +37,13 @@ export interface BatchRuleResult {
 export interface TrafficLog {
   id: string;
   time: string;
+  source: string;
   host: string;
   port: string;
   protocol: string;
+  processId: number;
+  processName: string;
+  processPath: string;
   matchedRuleType: RuleType;
   matchedRuleValue: string;
   matchedRuleIndex: number;
@@ -63,6 +67,17 @@ export interface AppConfig {
   pacListenAddr: string;
   proxyListenAddr: string;
   fastLinkProxyAddr: string;
+  fastLinkProxyType: string;
+  proxyInterfaceName: string;
+  proxyGuardEnabled: boolean;
+  proxyGuardInterface: string;
+  proxyGuardProgramPaths: string[];
+  directInterfaceName: string;
+  tunInterfaceName: string;
+  tunAddressCidr: string;
+  tunMtu: number;
+  tunIncludedApps: string[];
+  autoStartTunService: boolean;
   autoStartPacService: boolean;
   autoStartProxyService: boolean;
   autoEnableSystemPac: boolean;
@@ -71,11 +86,89 @@ export interface AppConfig {
   savedWindowsProxyConfig?: WindowsProxyConfig | null;
 }
 
+export interface ManagedAppStatus {
+  query: string;
+  name: string;
+  path: string;
+  running: boolean;
+  pidCount: number;
+  activeConnections: number;
+}
+
+export interface NetworkAdapterOption {
+  name: string;
+  description: string;
+  status: string;
+}
+
+export interface NetworkRoute {
+  ifIndex: number;
+  interfaceAlias: string;
+  destination: string;
+  nextHop: string;
+  routeMetric: number;
+  interfaceMetric: number;
+  state: string;
+}
+
+export interface DiagnosticPaths {
+  rootDir: string;
+  configPath: string;
+  legacyConfigPath: string;
+  diagnosticsPath: string;
+  tunRuntimeDir: string;
+  tunConfigPath: string;
+  tunLogPath: string;
+  coreDir: string;
+  coreExecutable: string;
+}
+
+export interface ProxyGuardRuntimeStatus {
+  applied: boolean;
+  message: string;
+  programCount: number;
+  blockedInterfaceCount: number;
+}
+
+export interface TunRuntimeStatus {
+  running: boolean;
+  available: boolean;
+  message: string;
+  packetCount: number;
+  byteCount: number;
+}
+
+export interface AgentDiagnostics {
+  generatedAt: string;
+  paths: DiagnosticPaths;
+  state: AppState;
+  proxyGuard: ProxyGuardRuntimeStatus;
+  tunStatus: TunRuntimeStatus;
+  networkAdapters: NetworkAdapterOption[];
+  defaultIpv4Routes: NetworkRoute[];
+  currentWindowsProxy?: WindowsProxyConfig | null;
+  tunConfigPreview: string;
+  tunLogTail: string;
+  recentLogs: TrafficLog[];
+}
+
 export interface ServiceStatus {
   pacRunning: boolean;
   pacUrl: string;
   proxyRunning: boolean;
   proxyAddr: string;
+  proxyGuardApplied: boolean;
+  proxyGuardMessage: string;
+  proxyGuardProgramCount: number;
+  tunRunning: boolean;
+  tunAvailable: boolean;
+  tunMessage: string;
+  tunIncludedAppCount: number;
+  managedAppCount: number;
+  managedProcessCount: number;
+  managedConnectionCount: number;
+  tunPacketCount: number;
+  tunByteCount: number;
   systemPacEnabled: boolean;
   currentAutoConfigURL: string;
   fastLinkReachable: boolean;
@@ -91,6 +184,8 @@ export interface AppState {
   config: AppConfig;
   status: ServiceStatus;
   logs: TrafficLog[];
+  managedApps: ManagedAppStatus[];
+  availableNetworkAdapters: NetworkAdapterOption[];
 }
 
 declare global {
@@ -103,6 +198,8 @@ declare global {
           StopPacService(): Promise<void>;
           StartProxyService(): Promise<void>;
           StopProxyService(): Promise<void>;
+          StartTunService(): Promise<void>;
+          StopTunService(): Promise<void>;
           EnableSystemPac(): Promise<void>;
           DisableSystemPac(): Promise<void>;
           RefreshStatus(): Promise<AppState>;
@@ -113,7 +210,11 @@ declare global {
           MoveRule(id: string, direction: "up" | "down"): Promise<AppState>;
           SaveSettings(config: AppConfig): Promise<AppState>;
           ExportConfig(): Promise<void>;
+          ExportAgentDiagnostics(): Promise<string>;
+          GetAgentDiagnostics(): Promise<AgentDiagnostics>;
           ImportConfig(): Promise<AppState>;
+          OpenConfigLocation(): Promise<void>;
+          OpenDataDirectory(): Promise<void>;
         };
       };
     };
