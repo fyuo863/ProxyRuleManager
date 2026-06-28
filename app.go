@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"proxy-rule-manager/internal/appmonitor"
 	"proxy-rule-manager/internal/config"
+	"proxy-rule-manager/internal/external"
 	"proxy-rule-manager/internal/logs"
 	"proxy-rule-manager/internal/model"
 	"proxy-rule-manager/internal/netadapter"
@@ -54,6 +56,12 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+
+	// Ensure external runtime components are available under user's .PRM layout.
+	if err := external.EnsureComponents(); err != nil {
+		// record error but continue; specific services will surface missing components when started
+		a.lastError = "external components: " + err.Error()
+	}
 
 	store, err := config.NewStore()
 	if err != nil {
@@ -163,14 +171,7 @@ func (a *App) getState(forceAdapters bool) model.AppState {
 		a.lastError = err.Error()
 	}
 
-	fastLinkReachable := false
-	fastLinkMessage := "上游代理端口不可用，请检查代理客户端或远端代理是否可达"
-	conn, dialErr := net.DialTimeout("tcp", cfg.FastLinkProxyAddr, 800*time.Millisecond)
-	if dialErr == nil {
-		fastLinkReachable = true
-		fastLinkMessage = "上游代理端口可连接"
-		_ = conn.Close()
-	}
+	fastLinkReachable, fastLinkMessage := a.probeFastLink(cfg.FastLinkProxyAddr)
 
 	enabledRules := 0
 	for _, rule := range cfg.Rules {
@@ -232,6 +233,83 @@ func (a *App) getState(forceAdapters bool) model.AppState {
 		ManagedApps:              managedSnapshot.ManagedApps,
 		AvailableNetworkAdapters: adapters,
 	}
+}
+
+func (a *App) probeFastLink(addr string) (bool, string) {
+	trimmed := strings.TrimSpace(addr)
+	if trimmed == "" {
+		return false, "上游代理地址为空"
+	}
+	host, port, err := net.SplitHostPort(trimmed)
+	if err != nil {
+		return false, "上游代理地址格式无效，应为 host:port"
+	}
+	if a.hasObservedFastLinkConnection(host, port) {
+		return true, "已检测到应用与上游代理的活动连接"
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		conn, dialErr := net.DialTimeout("tcp", trimmed, 1200*time.Millisecond)
+		if dialErr == nil {
+			_ = conn.Close()
+			return true, "上游代理端口可连接"
+		}
+		lastErr = dialErr
+		if attempt < 2 {
+			time.Sleep(150 * time.Millisecond)
+		}
+	}
+	if lastErr == nil {
+		return false, "上游代理端口不可用，请检查代理客户端或远端代理是否可达"
+	}
+	return false, fmt.Sprintf("上游代理端口不可用: %v", lastErr)
+}
+
+func (a *App) hasObservedFastLinkConnection(host, port string) bool {
+	if a.logStore == nil {
+		return false
+	}
+	for _, item := range a.logStore.List() {
+		if item.Source != "process" || item.Status != model.TrafficStatusActive {
+			continue
+		}
+		if strings.TrimSpace(item.Port) != strings.TrimSpace(port) {
+			continue
+		}
+		if sameEndpointHost(item.Host, host) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameEndpointHost(observed, configured string) bool {
+	left := strings.Trim(strings.TrimSpace(observed), "[]")
+	right := strings.Trim(strings.TrimSpace(configured), "[]")
+	if strings.EqualFold(left, right) {
+		return true
+	}
+	if strings.EqualFold(right, "localhost") {
+		if strings.EqualFold(left, "localhost") {
+			return true
+		}
+		if ip := net.ParseIP(left); ip != nil && ip.IsLoopback() {
+			return true
+		}
+		return false
+	}
+	if configuredIP := net.ParseIP(right); configuredIP != nil {
+		if observedIP := net.ParseIP(left); observedIP != nil {
+			if configuredIP.Equal(observedIP) {
+				return true
+			}
+			if configuredIP.IsLoopback() && observedIP.IsLoopback() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (a *App) StartPacService() error {
@@ -340,6 +418,44 @@ func (a *App) StopTunService() error {
 	return nil
 }
 
+func (a *App) PauseTrafficRouting() (model.AppState, error) {
+	var errs []error
+
+	if err := a.DisableSystemPac(); err != nil {
+		errs = append(errs, err)
+	}
+	if a.tunRunning {
+		if err := a.StopTunService(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if a.proxyRunning {
+		if err := a.StopProxyService(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if a.pacRunning {
+		if err := a.StopPacService(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	cfg := a.config.Get()
+	cfg.ProxyGuardEnabled = false
+	if err := a.reconcileProxyGuard(cfg); err != nil {
+		errs = append(errs, err)
+	}
+
+	if len(errs) > 0 {
+		joined := errors.Join(errs...)
+		a.lastError = joined.Error()
+		return a.GetState(), joined
+	}
+
+	a.lastError = ""
+	return a.GetState(), nil
+}
+
 func (a *App) EnableSystemPac() error {
 	cfg := a.config.Get()
 	if !a.pacRunning || !a.proxyRunning {
@@ -394,35 +510,24 @@ func (a *App) UpsertRule(rule model.Rule) (model.AppState, error) {
 		return a.GetState(), errors.New("MATCH,DIRECT 兜底规则由系统维护，不能单独编辑为其它形式")
 	}
 	rule = a.normalizeSingleRule(rule)
-	if rule.ID == "" {
-		rule.ID = uuid.NewString()
-	}
+	expandedRules := a.expandRuleSet(rule)
 
 	err := a.config.Update(func(cfg *model.AppConfig) error {
-		insertAt := len(cfg.Rules) - 1
-		for idx := range cfg.Rules {
-			if cfg.Rules[idx].ID == rule.ID {
-				cfg.Rules[idx] = rule
-				a.mergeDuplicateRules(cfg, rule.ID)
-				return nil
+		for _, item := range expandedRules {
+			if item.ID == "" {
+				item.ID = uuid.NewString()
 			}
+			a.applyRuleChange(cfg, item)
 		}
-		for idx := range cfg.Rules {
-			if rules.EquivalentRule(cfg.Rules[idx], rule) {
-				cfg.Rules[idx].Enabled = rule.Enabled
-				if strings.TrimSpace(rule.Remark) != "" {
-					cfg.Rules[idx].Remark = mergeRemarks(cfg.Rules[idx].Remark, rule.Remark)
-				}
-				return nil
-			}
-		}
-		cfg.Rules = append(cfg.Rules[:insertAt], append([]model.Rule{rule}, cfg.Rules[insertAt:]...)...)
 		return nil
 	})
 	if err != nil {
 		return a.GetState(), err
 	}
 	if err := a.config.Save(); err != nil {
+		return a.GetState(), err
+	}
+	if err := a.reloadTunIfRunning(); err != nil {
 		return a.GetState(), err
 	}
 	return a.GetState(), nil
@@ -440,47 +545,32 @@ func (a *App) BatchUpsertRules(request model.BatchRuleRequest) (model.BatchRuleR
 	mergedCount := 0
 
 	err := a.config.Update(func(cfg *model.AppConfig) error {
-		insertAt := len(cfg.Rules) - 1
 		for _, raw := range items {
-			rule, ok := rules.NormalizeRuleInput(raw, request.Target, request.Remark, request.Enabled)
+			rule, ok := rules.NormalizeRuleInput(raw, request.Target, request.Folder, request.Remark, request.Enabled)
 			if !ok {
 				skipped = append(skipped, model.BatchRuleItem{Raw: raw})
 				continue
 			}
-			rule.ID = uuid.NewString()
-
-			merged := false
-			for idx := range cfg.Rules {
-				if rules.EquivalentRule(cfg.Rules[idx], rule) {
-					cfg.Rules[idx].Enabled = request.Enabled
-					if strings.TrimSpace(request.Remark) != "" {
-						cfg.Rules[idx].Remark = mergeRemarks(cfg.Rules[idx].Remark, request.Remark)
-					}
-					skipped = append(skipped, model.BatchRuleItem{
-						Raw:       raw,
-						Type:      rule.Type,
-						Value:     rule.Value,
-						Target:    rule.Target,
-						Duplicate: true,
-					})
+			for _, item := range a.expandRuleSet(rule) {
+				item.ID = uuid.NewString()
+				change := a.applyRuleChange(cfg, item)
+				entry := model.BatchRuleItem{
+					Raw:    raw,
+					Type:   item.Type,
+					Value:  item.Value,
+					Target: item.Target,
+					Folder: item.Folder,
+				}
+				switch change {
+				case "merged":
+					entry.Duplicate = true
+					skipped = append(skipped, entry)
 					mergedCount++
-					merged = true
-					break
+				case "added":
+					added = append(added, entry)
+					addedCount++
 				}
 			}
-			if merged {
-				continue
-			}
-
-			cfg.Rules = append(cfg.Rules[:insertAt], append([]model.Rule{rule}, cfg.Rules[insertAt:]...)...)
-			insertAt++
-			addedCount++
-			added = append(added, model.BatchRuleItem{
-				Raw:    raw,
-				Type:   rule.Type,
-				Value:  rule.Value,
-				Target: rule.Target,
-			})
 		}
 		return nil
 	})
@@ -488,6 +578,9 @@ func (a *App) BatchUpsertRules(request model.BatchRuleRequest) (model.BatchRuleR
 		return model.BatchRuleResult{State: a.GetState()}, err
 	}
 	if err := a.config.Save(); err != nil {
+		return model.BatchRuleResult{State: a.GetState()}, err
+	}
+	if err := a.reloadTunIfRunning(); err != nil {
 		return model.BatchRuleResult{State: a.GetState()}, err
 	}
 
@@ -520,6 +613,9 @@ func (a *App) DeleteRule(id string) (model.AppState, error) {
 	if err := a.config.Save(); err != nil {
 		return a.GetState(), err
 	}
+	if err := a.reloadTunIfRunning(); err != nil {
+		return a.GetState(), err
+	}
 	return a.GetState(), nil
 }
 
@@ -550,7 +646,20 @@ func (a *App) MoveRule(id string, direction string) (model.AppState, error) {
 	if err := a.config.Save(); err != nil {
 		return a.GetState(), err
 	}
+	if err := a.reloadTunIfRunning(); err != nil {
+		return a.GetState(), err
+	}
 	return a.GetState(), nil
+}
+
+func (a *App) reloadTunIfRunning() error {
+	if !a.tunRunning {
+		return nil
+	}
+	if err := a.StopTunService(); err != nil {
+		return err
+	}
+	return a.StartTunService()
 }
 
 func (a *App) SaveSettings(next model.AppConfig) (model.AppState, error) {
@@ -714,6 +823,21 @@ func (a *App) OpenDataDirectory() error {
 	return nil
 }
 
+func (a *App) SetNetworkAdapterEnabled(name string, enabled bool) (model.AppState, error) {
+	if err := netadapter.SetEnabled(name, enabled); err != nil {
+		a.lastError = err.Error()
+		return a.getState(true), err
+	}
+	a.adaptersSeen = nil
+	a.adaptersAt = time.Time{}
+	if err := a.reconcileProxyGuard(a.config.Get()); err != nil {
+		a.lastError = err.Error()
+		return a.getState(true), err
+	}
+	a.lastError = ""
+	return a.getState(true), nil
+}
+
 func (a *App) normalizeSingleRule(rule model.Rule) model.Rule {
 	if detectedType, detectedValue := rules.DetectRuleType(rule.Value); rule.Type == "" || strings.TrimSpace(rule.Value) != detectedValue {
 		switch rule.Type {
@@ -730,8 +854,45 @@ func (a *App) normalizeSingleRule(rule model.Rule) model.Rule {
 		}
 	}
 	rule.Value = strings.TrimSpace(rule.Value)
+	rule.Folder = strings.TrimSpace(rule.Folder)
 	rule.Remark = strings.TrimSpace(rule.Remark)
+	rule.Folder = rules.DefaultFolderForRule(rule)
+	rule.Remark = rules.DefaultRemarkForRule(rule)
 	return rule
+}
+
+func (a *App) expandRuleSet(rule model.Rule) []model.Rule {
+	expanded := rules.ExpandRuleSiblings(rule)
+	out := make([]model.Rule, 0, len(expanded))
+	for _, item := range expanded {
+		out = append(out, a.normalizeSingleRule(item))
+	}
+	return out
+}
+
+func (a *App) applyRuleChange(cfg *model.AppConfig, rule model.Rule) string {
+	insertAt := len(cfg.Rules) - 1
+	for idx := range cfg.Rules {
+		if cfg.Rules[idx].ID == rule.ID && rule.ID != "" {
+			cfg.Rules[idx] = rule
+			a.mergeDuplicateRules(cfg, rule.ID)
+			return "updated"
+		}
+	}
+	for idx := range cfg.Rules {
+		if rules.EquivalentRule(cfg.Rules[idx], rule) {
+			cfg.Rules[idx].Enabled = rule.Enabled
+			if strings.TrimSpace(rule.Folder) != "" {
+				cfg.Rules[idx].Folder = rule.Folder
+			}
+			if strings.TrimSpace(rule.Remark) != "" {
+				cfg.Rules[idx].Remark = mergeRemarks(cfg.Rules[idx].Remark, rule.Remark)
+			}
+			return "merged"
+		}
+	}
+	cfg.Rules = append(cfg.Rules[:insertAt], append([]model.Rule{rule}, cfg.Rules[insertAt:]...)...)
+	return "added"
 }
 
 func (a *App) mergeDuplicateRules(cfg *model.AppConfig, keepID string) {

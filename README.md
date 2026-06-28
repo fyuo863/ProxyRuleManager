@@ -15,7 +15,7 @@
 - Windows 当前用户系统 PAC 启用/停用与恢复
 - 规则管理：新增、编辑、删除、启用/禁用、排序
 - 实时流量日志：规则命中、目标路径、上下行字节数、耗时、状态、错误
-- 配置持久化：`%APPDATA%/ProxyRuleManager/config.json`
+- 配置持久化：`%USERPROFILE%/.PRM/config.json`
 - 配置导入/导出
 
 ## 为什么不要开启 代理 的系统代理
@@ -97,7 +97,45 @@ wails dev
 wails build
 ```
 
-默认会生成 Windows 可执行文件 `ProxyRuleManager.exe`。
+默认会生成 Windows 可执行文件 `build/bin/ProxyRuleManager.exe`。
+
+## 在其他设备部署
+
+如果你要把这个项目部署到另一台 Windows 设备，推荐按下面的顺序操作：
+
+1. 在构建机上安装 `Go`、`Node.js` 和 `Wails CLI`，并确认本项目可以正常执行 `wails build`。
+2. 拉取项目源码，在项目根目录执行：
+
+```powershell
+go mod tidy
+cd frontend
+npm install
+cd ..
+wails build
+```
+
+3. 如果目标设备不能稳定联网，建议在构建机上提前准备运行时依赖，并随程序一起带过去：
+   - `third_party/windivert/WinDivert.dll`
+   - `third_party/windivert/WinDivert64.sys`
+   - `third_party/wintun/wintun.dll`
+   - `third_party/sing-box/sing-box.exe`
+4. 从构建机复制以下内容到目标设备：
+   - `build/bin/ProxyRuleManager.exe`
+   - 可选的 `third_party/` 目录
+5. 在目标设备上先准备上游代理程序，并确认它提供的本地端口可用，例如 `127.0.0.1:7892`。
+6. 首次启动 `ProxyRuleManager.exe` 时，程序会把运行时文件整理到当前用户目录下的 `.PRM`：
+   - `C:\Users\<用户名>\.PRM\config.json`
+   - `C:\Users\<用户名>\.PRM\tun-runtime\`
+   - `C:\Users\<用户名>\.PRM\core\`
+   - `C:\Users\<用户名>\.PRM\diagnostics\`
+7. 如果 `third_party/` 目录中已经带好了依赖文件，程序会优先从应用目录旁边复制到 `.PRM`；如果没带齐，则会尝试自动下载缺失组件。
+8. 如果需要使用“应用透明接管”或“代理进程出口限制”，请以管理员身份启动程序；仅使用 PAC 和本地分流代理时，通常不需要管理员权限。
+9. 启动后先确认以下项目全部正常：
+   - `PAC 服务` 已运行
+   - `本地分流代理` 已运行
+   - 上游代理端口可连接
+   - 需要时再开启 `系统 PAC` 和 `应用透明接管`
+10. 如需整体迁移现有配置，可把旧设备的 `C:\Users\<用户名>\.PRM\config.json` 复制到新设备相同位置；如需一起迁移诊断与运行时状态，也可以整个复制 `.PRM` 目录，但建议先关闭程序再操作。
 
 ## 使用方式
 
@@ -142,7 +180,7 @@ douyin.com -> DIRECT
 默认路径：
 
 ```text
-%APPDATA%/ProxyRuleManager/config.json
+%USERPROFILE%/.PRM/config.json
 ```
 
 配置内容包括：

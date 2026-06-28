@@ -54,12 +54,20 @@ export function OpenDataDirectory() {
   return window['go']['main']['App']['OpenDataDirectory']();
 }
 
+export function PauseTrafficRouting() {
+  return window['go']['main']['App']['PauseTrafficRouting']();
+}
+
 export function RefreshStatus() {
   return window['go']['main']['App']['RefreshStatus']();
 }
 
 export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
+}
+
+export function SetNetworkAdapterEnabled(arg1, arg2) {
+  return window['go']['main']['App']['SetNetworkAdapterEnabled'](arg1, arg2);
 }
 
 export function StartPacService() {

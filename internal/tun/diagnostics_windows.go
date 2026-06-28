@@ -14,7 +14,7 @@ func RuntimeArtifactsSnapshot() RuntimeArtifacts {
 	if dir, err := driverDir(); err == nil {
 		artifacts.CoreDir = dir
 	}
-	if dllPath, err := bundledWinDivertDir(); err == nil {
+	if dllPath, err := winDivertRuntimeDir(); err == nil {
 		artifacts.CoreExecutable = filepath.Join(dllPath, "WinDivert.dll")
 	}
 	return artifacts

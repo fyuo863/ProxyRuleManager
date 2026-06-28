@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,12 +14,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"golang.org/x/net/proxy"
 	"golang.org/x/sys/windows"
@@ -53,16 +54,52 @@ type WindowsService struct {
 	logFile     *os.File
 	options     model.TunOptions
 	queries     []string
+	configPath  string
 	connections map[uint16]*redirectConnection
 	byRedirect  map[uint16]*redirectConnection
 	procCache   map[uint32]processInfo
 	udpBlocked  map[string]struct{}
+
+	socketConnectEvents uint64
+	matchedConnects     uint64
+	redirectPrepared    uint64
+	acceptCount         uint64
+	upstreamDialFailed  uint64
+	tunnelEstablished   uint64
+	forwardReflected    uint64
+	reverseReflected    uint64
+	lastSocketError     string
+	lastUpstreamError   string
+	lastMatchedProcess  string
+}
+
+type runtimeSnapshot struct {
+	GeneratedAt           string           `json:"generatedAt"`
+	Running               bool             `json:"running"`
+	Message               string           `json:"message"`
+	LogPath               string           `json:"logPath"`
+	DriverPath            string           `json:"driverPath"`
+	Options               model.TunOptions `json:"options"`
+	Queries               []string         `json:"queries"`
+	SocketConnectEvents   uint64           `json:"socketConnectEvents"`
+	MatchedConnects       uint64           `json:"matchedConnects"`
+	RedirectPreparedCount uint64           `json:"redirectPreparedCount"`
+	AcceptCount           uint64           `json:"acceptCount"`
+	UpstreamDialFailures  uint64           `json:"upstreamDialFailures"`
+	TunnelEstablished     uint64           `json:"tunnelEstablished"`
+	ForwardReflected      uint64           `json:"forwardReflected"`
+	ReverseReflected      uint64           `json:"reverseReflected"`
+	LastMatchedProcess    string           `json:"lastMatchedProcess"`
+	LastSocketError       string           `json:"lastSocketError"`
+	LastUpstreamError     string           `json:"lastUpstreamError"`
 }
 
 type redirectConnection struct {
 	processID    uint32
 	processName  string
 	processPath  string
+	ifIdx        uint32
+	subIfIdx     uint32
 	localAddr    net.IP
 	localPort    uint16
 	remoteAddr   net.IP
@@ -118,9 +155,14 @@ func (s *WindowsService) Start(options model.TunOptions) error {
 	if err != nil {
 		return err
 	}
+	configPath := filepath.Join(runtimeDir, "transparent-runtime.json")
+	if err := ensureTransparentTCPAllow(); err != nil {
+		_ = logFile.Close()
+		return fmt.Errorf("配置透明捕获防火墙规则失败: %w", err)
+	}
 
 	socketHandle, err := api.open(
-		"tcp and (event == CONNECT or event == CLOSE) and localAddr != :: and remoteAddr != ::",
+		"event == CONNECT or event == CLOSE",
 		windivertLayerSocket,
 		1500,
 		windivertFlagRecvOnly|windivertFlagSniff,
@@ -130,7 +172,7 @@ func (s *WindowsService) Start(options model.TunOptions) error {
 		return fmt.Errorf("打开 WinDivert SOCKET 层失败: %w", err)
 	}
 	networkHandle, err := api.open(
-		"outbound and tcp and ip and !loopback",
+		"tcp and ip and !loopback",
 		windivertLayerNetwork,
 		1000,
 		0,
@@ -159,11 +201,24 @@ func (s *WindowsService) Start(options model.TunOptions) error {
 	s.running = true
 	s.startedAt = time.Now()
 	s.logPath = logPath
+	s.configPath = configPath
 	s.driverPath = driverDLL
 	s.lastMessage = fmt.Sprintf("应用级透明接管已启动，当前接管 %d 个目标应用（TCP）", len(s.queries))
+	s.socketConnectEvents = 0
+	s.matchedConnects = 0
+	s.redirectPrepared = 0
+	s.acceptCount = 0
+	s.upstreamDialFailed = 0
+	s.tunnelEstablished = 0
+	s.forwardReflected = 0
+	s.reverseReflected = 0
+	s.lastSocketError = ""
+	s.lastUpstreamError = ""
+	s.lastMatchedProcess = ""
 	s.mu.Unlock()
 
 	s.logf("service started; upstream=%s type=%s targets=%v", options.FastLinkAddr, options.FastLinkType, s.queries)
+	s.persistRuntimeSnapshot()
 
 	s.wg.Add(3)
 	go s.socketLoop()
@@ -223,6 +278,7 @@ func (s *WindowsService) Stop() error {
 	s.procCache = nil
 	s.lastMessage = "应用级透明接管已停止"
 	s.mu.Unlock()
+	s.persistRuntimeSnapshot()
 	return nil
 }
 
@@ -264,7 +320,7 @@ func (s *WindowsService) Status(options model.TunOptions) model.TunRuntimeStatus
 			Message:   "请至少配置一个需要透明接管的应用进程名或路径",
 		}
 	}
-	if _, err := bundledWinDivertDir(); err != nil {
+	if _, err := winDivertRuntimeDir(); err != nil {
 		return model.TunRuntimeStatus{
 			Running:   s.isRunning(),
 			Available: false,
@@ -299,27 +355,55 @@ func (s *WindowsService) socketLoop() {
 			if !s.isRunning() || isClosedHandleErr(err) {
 				return
 			}
+			s.recordSocketError(err)
 			s.logf("socket recv error: %v", err)
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		socket := addr.socket()
+		event := addr.event()
+		if event == windivertEventSocketConnect {
+			atomic.AddUint64(&s.socketConnectEvents, 1)
+		}
+		proc := s.lookupProcess(socket.ProcessID)
+		trackedProcess := strings.Contains(strings.ToLower(proc.name), "codex") || strings.Contains(strings.ToLower(proc.path), "codex")
 		if socket.Protocol != 6 {
+			if trackedProcess && event == windivertEventSocketConnect {
+				s.logf("socket connect skipped non-tcp pid=%d proc=%s proto=%d local-port=%d remote-port=%d flags=%08x", proc.pid, proc.path, socket.Protocol, socket.LocalPort, socket.RemotePort, addr.Flags)
+			}
 			continue
 		}
 		localIP := ipv4FromMapped(socket.LocalAddr)
 		remoteIP := ipv4FromMapped(socket.RemoteAddr)
 		if localIP == nil || remoteIP == nil {
+			if trackedProcess && event == windivertEventSocketConnect {
+				s.logf("socket connect skipped non-ipv4 pid=%d proc=%s local-raw=%08x,%08x,%08x,%08x remote-raw=%08x,%08x,%08x,%08x", proc.pid, proc.path, socket.LocalAddr[0], socket.LocalAddr[1], socket.LocalAddr[2], socket.LocalAddr[3], socket.RemoteAddr[0], socket.RemoteAddr[1], socket.RemoteAddr[2], socket.RemoteAddr[3])
+			}
+			continue
+		}
+		if localIP.IsLoopback() || remoteIP.IsLoopback() {
+			if trackedProcess && event == windivertEventSocketConnect {
+				s.logf("socket connect skipped loopback pid=%d proc=%s local=%s:%d remote=%s:%d", proc.pid, proc.path, localIP, socket.LocalPort, remoteIP, socket.RemotePort)
+			}
 			continue
 		}
 
-		switch addr.event() {
+		switch event {
 		case windivertEventSocketConnect:
-			proc := s.lookupProcess(socket.ProcessID)
 			query, ok := matchProcessQuery(proc, s.currentQueries())
 			if !ok {
+				if trackedProcess {
+					s.logf("socket connect ignored pid=%d proc=%s local=%s:%d remote=%s:%d queries=%v", proc.pid, proc.path, localIP, socket.LocalPort, remoteIP, socket.RemotePort, s.currentQueries())
+				}
 				continue
 			}
+			if s.shouldBypassTransparentConnect(remoteIP, socket.RemotePort) {
+				s.logf("socket connect bypassed pid=%d proc=%s remote=%s:%d reason=upstream-proxy", proc.pid, proc.path, remoteIP, socket.RemotePort)
+				continue
+			}
+			atomic.AddUint64(&s.matchedConnects, 1)
+			s.recordMatchedProcess(proc)
+			s.logf("socket connect matched query=%s pid=%d proc=%s local=%s:%d remote=%s:%d", query, proc.pid, proc.path, localIP, socket.LocalPort, remoteIP, socket.RemotePort)
 			if err := s.registerConnection(proc, query, localIP, socket.LocalPort, remoteIP, socket.RemotePort); err != nil {
 				s.logf("register redirect failed pid=%d local=%s:%d remote=%s:%d: %v", proc.pid, localIP, socket.LocalPort, remoteIP, socket.RemotePort, err)
 			}
@@ -359,36 +443,57 @@ func (s *WindowsService) networkLoop() {
 		}
 
 		if conn := s.connectionByRedirect(view.srcPort); conn != nil && conn.remotePort == view.dstPort && conn.remoteAddr.Equal(view.dstIP) {
+			if addr.network().IfIdx != 0 {
+				conn.ifIdx = addr.network().IfIdx
+				conn.subIfIdx = addr.network().SubIfIdx
+			}
 			view.setSrcIP(conn.remoteAddr)
 			view.setDstIP(conn.localAddr)
 			view.setSrcPort(conn.remotePort)
 			view.setDstPort(conn.localPort)
 			addr.setOutbound(false)
+			if conn.ifIdx != 0 {
+				addr.network().IfIdx = conn.ifIdx
+				addr.network().SubIfIdx = conn.subIfIdx
+			}
 			if err := s.api.calcChecksums(buf, &addr); err != nil {
 				s.logf("checksum reverse reflect failed: %v", err)
 			}
 			if err := s.api.send(s.networkHandle, buf, &addr); err != nil {
 				s.logf("reverse reflect send failed: %v", err)
 			} else {
+				atomic.AddUint64(&s.reverseReflected, 1)
 				atomic.AddUint64(&s.packetCount, 1)
 				atomic.AddUint64(&s.byteCount, uint64(len(buf)))
+				s.logf("reverse reflect injected redirect-port=%d -> local=%s:%d remote=%s:%d ifidx=%d subifidx=%d", conn.redirectPort, conn.localAddr, conn.localPort, conn.remoteAddr, conn.remotePort, conn.ifIdx, conn.subIfIdx)
 			}
 			continue
 		}
 
 		if conn := s.connectionByLocal(view.srcPort); conn != nil && conn.remotePort == view.dstPort && conn.remoteAddr.Equal(view.dstIP) {
+			if addr.network().IfIdx != 0 {
+				conn.ifIdx = addr.network().IfIdx
+				conn.subIfIdx = addr.network().SubIfIdx
+			}
 			view.setDstPort(conn.redirectPort)
 			view.setDstIP(view.srcIP)
 			view.setSrcIP(conn.remoteAddr)
+			view.setSrcPort(conn.remotePort)
 			addr.setOutbound(false)
+			if conn.ifIdx != 0 {
+				addr.network().IfIdx = conn.ifIdx
+				addr.network().SubIfIdx = conn.subIfIdx
+			}
 			if err := s.api.calcChecksums(buf, &addr); err != nil {
 				s.logf("checksum forward reflect failed: %v", err)
 			}
 			if err := s.api.send(s.networkHandle, buf, &addr); err != nil {
 				s.logf("forward reflect send failed: %v", err)
 			} else {
+				atomic.AddUint64(&s.forwardReflected, 1)
 				atomic.AddUint64(&s.packetCount, 1)
 				atomic.AddUint64(&s.byteCount, uint64(len(buf)))
+				s.logf("forward reflect injected local=%s:%d -> remote=%s:%d via redirect-port=%d ifidx=%d subifidx=%d", conn.localAddr, conn.localPort, conn.remoteAddr, conn.remotePort, conn.redirectPort, conn.ifIdx, conn.subIfIdx)
 			}
 			continue
 		}
@@ -428,6 +533,7 @@ func (s *WindowsService) registerConnection(proc processInfo, query string, loca
 		processID:    proc.pid,
 		processName:  proc.name,
 		processPath:  proc.path,
+		ifIdx:        interfaceIndexForIP(localIP),
 		localAddr:    append(net.IP(nil), localIP...),
 		localPort:    localPort,
 		remoteAddr:   append(net.IP(nil), remoteIP...),
@@ -446,7 +552,9 @@ func (s *WindowsService) registerConnection(proc processInfo, query string, loca
 	s.byRedirect[conn.redirectPort] = conn
 	s.mu.Unlock()
 
+	atomic.AddUint64(&s.redirectPrepared, 1)
 	s.logf("redirect prepared query=%s pid=%d %s:%d -> %s:%d via local-port=%d", query, proc.pid, conn.localAddr, conn.localPort, conn.remoteAddr, conn.remotePort, conn.redirectPort)
+	s.persistRuntimeSnapshot()
 	s.wg.Add(1)
 	go s.serveReflectedConnection(conn)
 	return nil
@@ -489,6 +597,7 @@ func (s *WindowsService) serveReflectedConnection(rc *redirectConnection) {
 	if ok {
 		_ = tcpListener.SetDeadline(time.Now().Add(30 * time.Second))
 	}
+	s.logf("waiting reflected connection pid=%d local=%s:%d redirect-port=%d remote=%s:%d", rc.processID, rc.localAddr, rc.localPort, rc.redirectPort, rc.remoteAddr, rc.remotePort)
 	appConn, err := rc.listener.Accept()
 	if err != nil {
 		if s.isRunning() && !errors.Is(err, net.ErrClosed) {
@@ -498,17 +607,25 @@ func (s *WindowsService) serveReflectedConnection(rc *redirectConnection) {
 	}
 	defer appConn.Close()
 	rc.accepted.Store(true)
+	atomic.AddUint64(&s.acceptCount, 1)
+	s.logf("reflected connection accepted pid=%d proc=%s remote=%s:%d", rc.processID, rc.processPath, rc.remoteAddr, rc.remotePort)
+	s.persistRuntimeSnapshot()
 
 	upstreamCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 	upstreamConn, err := s.dialUpstream(upstreamCtx, net.JoinHostPort(rc.remoteAddr.String(), fmt.Sprintf("%d", rc.remotePort)))
 	if err != nil {
+		atomic.AddUint64(&s.upstreamDialFailed, 1)
+		s.recordUpstreamError(err)
 		s.logf("dial upstream failed for %s:%d: %v", rc.remoteAddr, rc.remotePort, err)
+		s.persistRuntimeSnapshot()
 		return
 	}
 	defer upstreamConn.Close()
 
+	atomic.AddUint64(&s.tunnelEstablished, 1)
 	s.logf("transparent tunnel established pid=%d %s -> %s:%d", rc.processID, rc.processName, rc.remoteAddr, rc.remotePort)
+	s.persistRuntimeSnapshot()
 	pipe := func(dst, src net.Conn) {
 		_, _ = io.Copy(dst, src)
 		if tcpConn, ok := dst.(*net.TCPConn); ok {
@@ -710,6 +827,12 @@ func matchProcessQuery(proc processInfo, queries []string) (string, bool) {
 		if query == "" {
 			continue
 		}
+		if strings.ContainsAny(query, "*?") {
+			if matchesProcessPattern(query, name, path) {
+				return raw, true
+			}
+			continue
+		}
 		if strings.Contains(query, "\\") || strings.Contains(query, "/") || strings.Contains(query, ":") {
 			if path != "" && (path == query || strings.HasSuffix(path, query)) {
 				return raw, true
@@ -724,6 +847,23 @@ func matchProcessQuery(proc processInfo, queries []string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func matchesProcessPattern(pattern, name, path string) bool {
+	pattern = strings.ReplaceAll(pattern, "/", "\\")
+	path = strings.ReplaceAll(path, "/", "\\")
+	if ok, _ := filepath.Match(pattern, name); ok {
+		return true
+	}
+	if path != "" {
+		if ok, _ := filepath.Match(pattern, path); ok {
+			return true
+		}
+		if ok, _ := filepath.Match(baseName(pattern), name); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeApps(values []string) []string {
@@ -753,21 +893,67 @@ func baseName(path string) string {
 	return path
 }
 
+func (s *WindowsService) shouldBypassTransparentConnect(remoteIP net.IP, remotePort uint16) bool {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(s.options.FastLinkAddr))
+	if err != nil {
+		return false
+	}
+	parsedPort, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || uint16(parsedPort) != remotePort {
+		return false
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return remoteIP.IsLoopback()
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.Equal(remoteIP)
+	}
+	resolveCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIP(resolveCtx, "ip", host)
+	if err != nil {
+		return false
+	}
+	for _, ip := range ips {
+		if ip.Equal(remoteIP) {
+			return true
+		}
+	}
+	return false
+}
+
 func ipv4FromMapped(words [4]uint32) net.IP {
-	raw := (*[16]byte)(unsafe.Pointer(&words[0]))
-	if raw[10] == 0xFF && raw[11] == 0xFF {
-		return net.IPv4(raw[12], raw[13], raw[14], raw[15]).To4()
+	// WinDivert exposes SOCKET-layer IPv4 addresses as IPv4-mapped IPv6 values in
+	// host byte order, with the low 32 bits first on little-endian Windows hosts:
+	// [ ipv4, 0x0000ffff, 0x00000000, 0x00000000 ].
+	if words[1] != 0x0000ffff || words[2] != 0 || words[3] != 0 {
+		return nil
 	}
-	if raw[0] == 0 && raw[1] == 0 && raw[2] == 0 && raw[3] == 0 {
-		return net.IPv4(raw[12], raw[13], raw[14], raw[15]).To4()
-	}
-	return nil
+	var raw [4]byte
+	binary.BigEndian.PutUint32(raw[:], words[0])
+	return net.IPv4(raw[0], raw[1], raw[2], raw[3]).To4()
 }
 
 func ensureWinDivertRuntime(runtimeDir string) (string, error) {
-	sourceDir, err := bundledWinDivertDir()
+	// If runtimeDir already contains the runtime files, use them.
+	ok := true
+	for _, name := range []string{"WinDivert.dll", "WinDivert64.sys"} {
+		if _, err := os.Stat(filepath.Join(runtimeDir, name)); err != nil {
+			ok = false
+			break
+		}
+	}
+	if ok {
+		return filepath.Join(runtimeDir, "WinDivert.dll"), nil
+	}
+
+	sourceDir, err := winDivertRuntimeDir()
 	if err != nil {
 		return "", err
+	}
+	if samePath(sourceDir, runtimeDir) {
+		return filepath.Join(runtimeDir, "WinDivert.dll"), nil
 	}
 	for _, name := range []string{"WinDivert.dll", "WinDivert64.sys"} {
 		src := filepath.Join(sourceDir, name)
@@ -779,26 +965,17 @@ func ensureWinDivertRuntime(runtimeDir string) (string, error) {
 	return filepath.Join(runtimeDir, "WinDivert.dll"), nil
 }
 
-func bundledWinDivertDir() (string, error) {
-	candidates := []string{}
-	if cwd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, filepath.Join(cwd, "third_party", bundledDriverDirName))
+func winDivertRuntimeDir() (string, error) {
+	dir, err := prmfs.TunRuntimeDir()
+	if err != nil {
+		return "", err
 	}
-	if exePath, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exePath)
-		candidates = append(candidates,
-			filepath.Join(exeDir, "third_party", bundledDriverDirName),
-			filepath.Join(exeDir, bundledDriverDirName),
-		)
-	}
-	for _, dir := range candidates {
-		if _, err := os.Stat(filepath.Join(dir, "WinDivert.dll")); err == nil {
-			if _, err := os.Stat(filepath.Join(dir, "WinDivert64.sys")); err == nil {
-				return dir, nil
-			}
+	for _, name := range []string{"WinDivert.dll", "WinDivert64.sys"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			return "", fmt.Errorf("未找到 WinDivert 运行文件，请确认 %s 下已放置 %s", dir, name)
 		}
 	}
-	return "", errors.New("未找到内置 WinDivert 运行文件，请确认 third_party/windivert 已随程序提供")
+	return dir, nil
 }
 
 func copyFile(src, dst string) error {
@@ -826,7 +1003,45 @@ func runtimeDir() (string, error) {
 }
 
 func driverDir() (string, error) {
-	return bundledWinDivertDir()
+	return winDivertRuntimeDir()
+}
+
+func samePath(left, right string) bool {
+	return filepath.Clean(strings.ToLower(left)) == filepath.Clean(strings.ToLower(right))
+}
+
+func interfaceIndexForIP(target net.IP) uint32 {
+	target = target.To4()
+	if target == nil {
+		return 0
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return 0
+	}
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil {
+				continue
+			}
+			ip = ip.To4()
+			if ip != nil && ip.Equal(target) {
+				return uint32(iface.Index)
+			}
+		}
+	}
+	return 0
 }
 
 func (s *WindowsService) connectionByLocal(port uint16) *redirectConnection {
@@ -892,6 +1107,62 @@ func (s *WindowsService) logf(format string, args ...any) {
 	}
 }
 
+func (s *WindowsService) recordSocketError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastSocketError = err.Error()
+}
+
+func (s *WindowsService) recordUpstreamError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastUpstreamError = err.Error()
+}
+
+func (s *WindowsService) recordMatchedProcess(proc processInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastMatchedProcess = proc.path
+}
+
+func (s *WindowsService) persistRuntimeSnapshot() {
+	s.mu.RLock()
+	snapshot := runtimeSnapshot{
+		GeneratedAt:           time.Now().Format(time.RFC3339),
+		Running:               s.running,
+		Message:               s.lastMessage,
+		LogPath:               s.logPath,
+		DriverPath:            s.driverPath,
+		Options:               s.options,
+		Queries:               append([]string(nil), s.queries...),
+		SocketConnectEvents:   atomic.LoadUint64(&s.socketConnectEvents),
+		MatchedConnects:       atomic.LoadUint64(&s.matchedConnects),
+		RedirectPreparedCount: atomic.LoadUint64(&s.redirectPrepared),
+		AcceptCount:           atomic.LoadUint64(&s.acceptCount),
+		UpstreamDialFailures:  atomic.LoadUint64(&s.upstreamDialFailed),
+		TunnelEstablished:     atomic.LoadUint64(&s.tunnelEstablished),
+		ForwardReflected:      atomic.LoadUint64(&s.forwardReflected),
+		ReverseReflected:      atomic.LoadUint64(&s.reverseReflected),
+		LastMatchedProcess:    s.lastMatchedProcess,
+		LastSocketError:       s.lastSocketError,
+		LastUpstreamError:     s.lastUpstreamError,
+	}
+	configPath := s.configPath
+	s.mu.RUnlock()
+
+	if configPath == "" {
+		return
+	}
+	data, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		s.logf("persist runtime snapshot marshal failed: %v", err)
+		return
+	}
+	if err := os.WriteFile(configPath, data, 0o644); err != nil {
+		s.logf("persist runtime snapshot write failed: %v", err)
+	}
+}
+
 func isAdministrator() bool {
 	token := windows.GetCurrentProcessToken()
 	adminSid, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
@@ -908,8 +1179,10 @@ func isClosedHandleErr(err error) bool {
 }
 
 func clearTransparentFirewallRules() error {
-	_, err := runPowerShell("$group = '" + psLiteral(transparentFWGroup) + "'\n" +
-		"Get-NetFirewallRule -Group $group -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue | Out-Null\n")
+	_, err := runPowerShell("$ErrorActionPreference = 'Stop'\n" +
+		"$group = '" + psLiteral(transparentFWGroup) + "'\n" +
+		"$rules = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Group -eq $group })\n" +
+		"if ($rules.Count -gt 0) { $rules | Remove-NetFirewallRule -ErrorAction Stop | Out-Null }\n")
 	return err
 }
 
@@ -924,9 +1197,35 @@ func addTransparentUDPBlockScript(processPath string) string {
 	b.WriteString("').Path\n")
 	b.WriteString("$name = [System.IO.Path]::GetFileName($program)\n")
 	b.WriteString("$display = 'Transparent UDP Block - ' + $name\n")
-	b.WriteString("$exists = Get-NetFirewallRule -Group $group -DisplayName $display -ErrorAction SilentlyContinue\n")
+	b.WriteString("$exists = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Group -eq $group -and $_.DisplayName -eq $display })\n")
 	b.WriteString("if (-not $exists) {\n")
 	b.WriteString("  New-NetFirewallRule -DisplayName $display -Group $group -Direction Outbound -Action Block -Enabled True -Profile Any -Program $program -Protocol UDP | Out-Null\n")
+	b.WriteString("}\n")
+	return b.String()
+}
+
+func ensureTransparentTCPAllow() error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	_, err = runPowerShell(addTransparentTCPAllowScript(exePath))
+	return err
+}
+
+func addTransparentTCPAllowScript(programPath string) string {
+	var b strings.Builder
+	b.WriteString("$ErrorActionPreference = 'Stop'\n")
+	b.WriteString("$group = '")
+	b.WriteString(psLiteral(transparentFWGroup))
+	b.WriteString("'\n")
+	b.WriteString("$program = (Resolve-Path -LiteralPath '")
+	b.WriteString(psLiteral(programPath))
+	b.WriteString("').Path\n")
+	b.WriteString("$display = 'Transparent TCP Allow - ' + [System.IO.Path]::GetFileName($program)\n")
+	b.WriteString("$exists = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Group -eq $group -and $_.DisplayName -eq $display })\n")
+	b.WriteString("if ($exists.Count -eq 0) {\n")
+	b.WriteString("  New-NetFirewallRule -DisplayName $display -Group $group -Direction Inbound -Action Allow -Enabled True -Profile Any -Program $program -Protocol TCP | Out-Null\n")
 	b.WriteString("}\n")
 	return b.String()
 }

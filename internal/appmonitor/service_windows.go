@@ -5,6 +5,7 @@ package appmonitor
 import (
 	"fmt"
 	"net"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -430,6 +431,12 @@ func matchProcessQuery(proc processInfo, queries []string) (string, bool) {
 		if query == "" {
 			continue
 		}
+		if strings.ContainsAny(query, "*?") {
+			if matchesProcessPattern(query, name, path) {
+				return raw, true
+			}
+			continue
+		}
 		if strings.Contains(query, "\\") || strings.Contains(query, "/") || strings.Contains(query, ":") {
 			if path != "" && (path == query || strings.HasSuffix(path, query)) {
 				return raw, true
@@ -444,6 +451,23 @@ func matchProcessQuery(proc processInfo, queries []string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func matchesProcessPattern(pattern, name, path string) bool {
+	pattern = strings.ReplaceAll(pattern, "/", "\\")
+	path = strings.ReplaceAll(path, "/", "\\")
+	if ok, _ := filepath.Match(pattern, name); ok {
+		return true
+	}
+	if path != "" {
+		if ok, _ := filepath.Match(pattern, path); ok {
+			return true
+		}
+		if ok, _ := filepath.Match(baseName(pattern), name); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func collapseManagedApps(queries []string, matched map[uint32]model.ManagedAppStatus) []model.ManagedAppStatus {

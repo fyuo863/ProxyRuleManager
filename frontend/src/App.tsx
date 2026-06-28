@@ -11,6 +11,8 @@ import type {
   TrafficLog,
 } from "./wails";
 
+const defaultTunIncludedApps = ["Codex.exe", "codex.exe", "codex-command-runner-*.exe"];
+
 const emptyState: AppState = {
   config: {
     rules: [],
@@ -26,7 +28,7 @@ const emptyState: AppState = {
     tunInterfaceName: "ProxyRuleManagerTun",
     tunAddressCidr: "172.19.0.1/30",
     tunMtu: 1500,
-    tunIncludedApps: ["Codex.exe"],
+    tunIncludedApps: defaultTunIncludedApps,
     autoStartTunService: false,
     autoStartPacService: false,
     autoStartProxyService: false,
@@ -171,6 +173,7 @@ function App() {
   const [hostFilter, setHostFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState<"ALL" | "APP" | "WEB">("ALL");
   const [targetFilter, setTargetFilter] = useState<RuleTarget | "ALL">("ALL");
+  const [ruleFolderFilter, setRuleFolderFilter] = useState("ALL");
   const [logLimit, setLogLimit] = useState<100 | 500>(100);
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<AppConfig>(emptyState.config);
@@ -178,6 +181,7 @@ function App() {
   const [batchDraft, setBatchDraft] = useState<BatchRuleRequest>({
     content: "",
     target: "PROXY",
+    folder: "",
     remark: "",
     enabled: true,
   });
@@ -250,6 +254,20 @@ function App() {
     }
     return items.slice(0, logLimit);
   }, [state.logs, hostFilter, sourceFilter, targetFilter, logLimit]);
+
+  const availableRuleFolders = useMemo(() => {
+    const folders = state.config.rules
+      .map((rule) => rule.folder?.trim() || "未分类")
+      .filter((value, index, arr) => arr.indexOf(value) === index);
+    return folders;
+  }, [state.config.rules]);
+
+  const visibleRules = useMemo(() => {
+    if (ruleFolderFilter === "ALL") {
+      return state.config.rules;
+    }
+    return state.config.rules.filter((rule) => (rule.folder?.trim() || "未分类") === ruleFolderFilter);
+  }, [ruleFolderFilter, state.config.rules]);
 
   const batchPreview = useMemo(() => {
     return batchDraft.content
@@ -341,6 +359,7 @@ function App() {
       type: "DOMAIN-SUFFIX",
       value: "",
       target: "DIRECT",
+      folder: "",
       remark: "",
     });
   };
@@ -353,6 +372,7 @@ function App() {
       type: detected.type,
       value: detected.value,
       target,
+      folder: "",
       remark: `来自日志 ${log.host}`,
     });
   };
@@ -465,10 +485,12 @@ function App() {
                 代理出口限制: {state.status.proxyGuardMessage || "未检测"}
               </div>
               <div className="console-actions secondary-actions">
+                <button className="ghost" onClick={() => void runAction(() => invoke("PauseTrafficRouting"))}>暂停分流</button>
                 <button className="ghost" onClick={() => void runAction(() => invoke("ClearLogs"))}>清空日志</button>
                 <button className="ghost" onClick={() => void runAction(() => invoke("ExportConfig"))}>导出配置</button>
                 <button className="ghost" onClick={() => void runAction(() => invoke("ImportConfig"))}>导入配置</button>
               </div>
+              <div className="hint">“暂停分流”会保留 PRM 窗口，但会停掉系统 PAC、本地分流代理、应用透明接管，并撤销代理出口限制；恢复时按上面的开关重新开启即可。</div>
             </div>
 
             <div className="panel panel-flat console-overview">
@@ -518,6 +540,36 @@ function App() {
               </div>
               <div className="hint">透明接管: {state.status.tunMessage || "未检测"}</div>
             </div>
+
+            <div className="panel panel-flat">
+              <div className="section-head">
+                <div>
+                  <p className="eyebrow">Adapters</p>
+                  <h2>网卡控制</h2>
+                </div>
+              </div>
+              <div className="preview-list">
+                {state.availableNetworkAdapters.map((adapter) => {
+                  const isUp = adapter.status === "Up";
+                  return (
+                    <div key={adapter.name} className="preview-item">
+                      <strong>{adapter.name}</strong>
+                      <span className="muted">{adapter.description || "无描述"}</span>
+                      <span className="muted">状态: {adapter.status || "Unknown"}</span>
+                      <div className="inline-actions compact-actions-single">
+                        <button
+                          className="small"
+                          onClick={() => void runAction(() => invoke("SetNetworkAdapterEnabled", adapter.name, !isUp))}
+                        >
+                          {isUp ? "停用" : "启用"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {state.availableNetworkAdapters.length === 0 && <div className="hint">当前未检测到可控制网卡。</div>}
+            </div>
           </div>
           )}
 
@@ -531,11 +583,20 @@ function App() {
               <button onClick={openNewRule}>新增规则</button>
             </div>
             <div className="panel panel-flat">
+              <div className="panel-header">
+                <div className="toolbar compact-toolbar">
+                  <select value={ruleFolderFilter} onChange={(e) => setRuleFolderFilter(e.target.value)}>
+                    <option value="ALL">全部分类夹</option>
+                    {availableRuleFolders.map((folder) => <option key={folder} value={folder}>{folder}</option>)}
+                  </select>
+                </div>
+              </div>
               <div className="desktop-table">
               <table>
                 <thead>
                   <tr>
                     <th>启用</th>
+                    <th>分类夹</th>
                     <th>类型</th>
                     <th>值</th>
                     <th>目标</th>
@@ -544,9 +605,10 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {state.config.rules.map((rule) => (
+                  {visibleRules.map((rule) => (
                     <tr key={rule.id}>
                       <td>{rule.enabled ? "Yes" : "No"}</td>
+                      <td>{rule.folder || "未分类"}</td>
                       <td>{rule.type}</td>
                       <td className="mono">{rule.value}</td>
                       <td>{rule.target}</td>
@@ -565,7 +627,7 @@ function App() {
               </table>
               </div>
               <div className="compact-list">
-                {state.config.rules.map((rule) => (
+                {visibleRules.map((rule) => (
                   <div key={rule.id} className="compact-card">
                     <div className="compact-card-head">
                       <strong className="mono">{rule.value}</strong>
@@ -574,6 +636,7 @@ function App() {
                     <div className="compact-meta">
                       <span>{rule.enabled ? "启用" : "禁用"}</span>
                       <span>{rule.type}</span>
+                      <span>{rule.folder || "未分类"}</span>
                     </div>
                     {rule.remark && <div className="compact-note">{rule.remark}</div>}
                     <div className="inline-actions compact-actions">
@@ -710,6 +773,10 @@ function App() {
                     </select>
                   </label>
                   <label>
+                    分类夹
+                    <input value={batchDraft.folder} onChange={(e) => setBatchDraft({ ...batchDraft, folder: e.target.value })} placeholder="例如：开发 / GitHub" />
+                  </label>
+                  <label>
                     备注
                     <input value={batchDraft.remark} onChange={(e) => setBatchDraft({ ...batchDraft, remark: e.target.value })} placeholder="例如：一组 AI 站点" />
                   </label>
@@ -830,7 +897,7 @@ function App() {
                       rows={5}
                       value={(settingsDraft.tunIncludedApps ?? []).join("\n")}
                       onChange={(e) => updateSettingsDraft({ tunIncludedApps: e.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
-                      placeholder={"Codex.exe\nchrome.exe\nmsedge.exe"}
+                      placeholder={"Codex.exe\ncodex.exe\ncodex-command-runner-*.exe"}
                     />
                   </label>
                   {state.managedApps.length > 0 && (
@@ -850,6 +917,7 @@ function App() {
                     <input type="checkbox" checked={settingsDraft.autoStartTunService} onChange={(e) => updateSettingsDraft({ autoStartTunService: e.target.checked })} />
                     启动时自动启动应用透明接管
                   </label>
+                  <div className="hint full">`Codex.exe` 会覆盖桌面主进程，`codex.exe` 会覆盖内置 CLI / resources 子进程，`codex-command-runner-*.exe` 用来兜住带版本号的命令执行子进程。</div>
                   <div className="hint full">这里的应用名单会直接决定哪些进程进入透明接管数据面；未命中的其它系统流量不会被卷入。</div>
                   <div className="hint full">当前透明接管由 WinDivert 在 Windows 上按进程拦截 TCP 连接，再通过本程序经上游 HTTP CONNECT 或 SOCKS5 建立隧道。</div>
                   <div className="hint full">如果上游代理地址填写的是 `127.0.0.1` 或 `localhost`，最终外网出口仍由那个本地代理程序自己决定；需要固定出口时，请继续使用“代理进程出口限制”。</div>
@@ -909,14 +977,21 @@ function App() {
                 备注
                 <input value={editingRule.remark} onChange={(e) => setEditingRule({ ...editingRule, remark: e.target.value })} />
               </label>
+              <label className="full">
+                分类夹
+                <input value={editingRule.folder} onChange={(e) => setEditingRule({ ...editingRule, folder: e.target.value })} placeholder="留空时按已知站点自动归类" />
+              </label>
               <label className="check">
                 <input type="checkbox" checked={editingRule.enabled} onChange={(e) => setEditingRule({ ...editingRule, enabled: e.target.checked })} />
                 启用规则
               </label>
-              <div className="hint full">
-                当前识别建议：`{detectRuleType(editingRule.value).type}` / `{detectRuleType(editingRule.value).value || "待输入"}`
-              </div>
-              <button type="submit">保存规则</button>
+                <div className="hint full">
+                  已知站点在这里会自动补齐同组兄弟域名，例如 `github.com` 会顺带补上 `githubassets.com`、`githubusercontent.com`。
+                </div>
+                <div className="hint full">
+                  当前识别建议：`{detectRuleType(editingRule.value).type}` / `{detectRuleType(editingRule.value).value || "待输入"}`
+                </div>
+                <button type="submit">保存规则</button>
             </form>
           </div>
         </div>

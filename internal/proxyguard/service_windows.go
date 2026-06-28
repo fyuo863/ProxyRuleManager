@@ -167,8 +167,10 @@ func applyRulesScript(allowed string, paths []string) string {
 }
 
 func removeRulesScript() string {
-	return "$group = '" + psLiteral(firewallRuleGroup) + "'\n" +
-		"Get-NetFirewallRule -Group $group -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue | Out-Null\n"
+	return "$ErrorActionPreference = 'Stop'\n" +
+		"$group = '" + psLiteral(firewallRuleGroup) + "'\n" +
+		"$rules = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Group -eq $group })\n" +
+		"if ($rules.Count -gt 0) { $rules | Remove-NetFirewallRule -ErrorAction Stop | Out-Null }\n"
 }
 
 func psLiteral(value string) string {

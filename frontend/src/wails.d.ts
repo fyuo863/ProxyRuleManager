@@ -8,12 +8,14 @@ export interface Rule {
   type: RuleType;
   value: string;
   target: RuleTarget;
+  folder: string;
   remark: string;
 }
 
 export interface BatchRuleRequest {
   content: string;
   target: RuleTarget;
+  folder: string;
   remark: string;
   enabled: boolean;
 }
@@ -23,6 +25,7 @@ export interface BatchRuleItem {
   type: RuleType;
   value: string;
   target: RuleTarget;
+  folder: string;
   duplicate: boolean;
 }
 
@@ -209,12 +212,14 @@ declare global {
           DeleteRule(id: string): Promise<AppState>;
           MoveRule(id: string, direction: "up" | "down"): Promise<AppState>;
           SaveSettings(config: AppConfig): Promise<AppState>;
+          PauseTrafficRouting(): Promise<AppState>;
           ExportConfig(): Promise<void>;
           ExportAgentDiagnostics(): Promise<string>;
           GetAgentDiagnostics(): Promise<AgentDiagnostics>;
           ImportConfig(): Promise<AppState>;
           OpenConfigLocation(): Promise<void>;
           OpenDataDirectory(): Promise<void>;
+          SetNetworkAdapterEnabled(name: string, enabled: boolean): Promise<AppState>;
         };
       };
     };

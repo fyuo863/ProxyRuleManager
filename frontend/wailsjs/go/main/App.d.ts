@@ -28,9 +28,13 @@ export function OpenConfigLocation():Promise<void>;
 
 export function OpenDataDirectory():Promise<void>;
 
+export function PauseTrafficRouting():Promise<model.AppState>;
+
 export function RefreshStatus():Promise<model.AppState>;
 
 export function SaveSettings(arg1:model.AppConfig):Promise<model.AppState>;
+
+export function SetNetworkAdapterEnabled(arg1:string,arg2:boolean):Promise<model.AppState>;
 
 export function StartPacService():Promise<void>;
 

@@ -230,6 +230,7 @@ export namespace model {
 	    type: string;
 	    value: string;
 	    target: string;
+	    folder: string;
 	    remark: string;
 	
 	    static createFrom(source: any = {}) {
@@ -243,6 +244,7 @@ export namespace model {
 	        this.type = source["type"];
 	        this.value = source["value"];
 	        this.target = source["target"];
+	        this.folder = source["folder"];
 	        this.remark = source["remark"];
 	    }
 	}
@@ -439,6 +441,7 @@ export namespace model {
 	    type: string;
 	    value: string;
 	    target: string;
+	    folder: string;
 	    duplicate: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -451,12 +454,14 @@ export namespace model {
 	        this.type = source["type"];
 	        this.value = source["value"];
 	        this.target = source["target"];
+	        this.folder = source["folder"];
 	        this.duplicate = source["duplicate"];
 	    }
 	}
 	export class BatchRuleRequest {
 	    content: string;
 	    target: string;
+	    folder: string;
 	    remark: string;
 	    enabled: boolean;
 	
@@ -468,6 +473,7 @@ export namespace model {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.content = source["content"];
 	        this.target = source["target"];
+	        this.folder = source["folder"];
 	        this.remark = source["remark"];
 	        this.enabled = source["enabled"];
 	    }

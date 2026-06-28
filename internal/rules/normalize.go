@@ -14,7 +14,7 @@ type BatchParseResult struct {
 	Duplicate bool       `json:"duplicate"`
 }
 
-func NormalizeRuleInput(raw string, fallbackTarget model.RuleTarget, fallbackRemark string, enabled bool) (model.Rule, bool) {
+func NormalizeRuleInput(raw string, fallbackTarget model.RuleTarget, fallbackFolder string, fallbackRemark string, enabled bool) (model.Rule, bool) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return model.Rule{}, false
@@ -30,6 +30,7 @@ func NormalizeRuleInput(raw string, fallbackTarget model.RuleTarget, fallbackRem
 		Type:    ruleType,
 		Value:   normalized,
 		Target:  fallbackTarget,
+		Folder:  strings.TrimSpace(fallbackFolder),
 		Remark:  strings.TrimSpace(fallbackRemark),
 	}, true
 }
@@ -116,4 +117,9 @@ func EquivalentRule(left, right model.Rule) bool {
 	return left.Type == right.Type &&
 		strings.EqualFold(strings.TrimSpace(left.Value), strings.TrimSpace(right.Value)) &&
 		left.Target == right.Target
+}
+
+func SameRulePattern(left, right model.Rule) bool {
+	return left.Type == right.Type &&
+		strings.EqualFold(strings.TrimSpace(left.Value), strings.TrimSpace(right.Value))
 }

@@ -6,12 +6,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
 
 	"proxy-rule-manager/internal/model"
 	"proxy-rule-manager/internal/prmfs"
+	"proxy-rule-manager/internal/rules"
 )
 
 type Store struct {
@@ -20,14 +22,29 @@ type Store struct {
 	cfg  model.AppConfig
 }
 
+var defaultTunIncludedApps = []string{
+	"Codex.exe",
+	"codex.exe",
+	"codex-command-runner-*.exe",
+}
+
 func defaultRules() []model.Rule {
-	return []model.Rule{
-		{ID: uuid.NewString(), Enabled: true, Type: model.RuleTypeDomainSuffix, Value: "openai.com", Target: model.RuleTargetProxy, Remark: "OpenAI domains"},
-		{ID: uuid.NewString(), Enabled: true, Type: model.RuleTypeDomainSuffix, Value: "chatgpt.com", Target: model.RuleTargetProxy, Remark: "ChatGPT domains"},
-		{ID: uuid.NewString(), Enabled: true, Type: model.RuleTypeDomainSuffix, Value: "oaistatic.com", Target: model.RuleTargetProxy, Remark: "OpenAI static assets"},
-		{ID: uuid.NewString(), Enabled: true, Type: model.RuleTypeDomainSuffix, Value: "oaiusercontent.com", Target: model.RuleTargetProxy, Remark: "OpenAI uploads/downloads"},
-		{ID: uuid.NewString(), Enabled: true, Type: model.RuleTypeMatch, Value: "MATCH", Target: model.RuleTargetDirect, Remark: "Fallback rule"},
+	base := rules.CommonDomainRules()
+	out := make([]model.Rule, 0, len(base)+1)
+	for _, rule := range base {
+		rule.ID = uuid.NewString()
+		out = append(out, rule)
 	}
+	out = append(out, model.Rule{
+		ID:      uuid.NewString(),
+		Enabled: true,
+		Type:    model.RuleTypeMatch,
+		Value:   "MATCH",
+		Target:  model.RuleTargetDirect,
+		Folder:  "系统",
+		Remark:  "Fallback rule",
+	})
+	return out
 }
 
 func defaultConfig() model.AppConfig {
@@ -45,7 +62,7 @@ func defaultConfig() model.AppConfig {
 		TunInterfaceName:       "ProxyRuleManagerTun",
 		TunAddressCIDR:         "172.19.0.1/30",
 		TunMTU:                 1500,
-		TunIncludedApps:        []string{"Codex.exe"},
+		TunIncludedApps:        defaultTunIncludedAppsCopy(),
 		AutoStartTunService:    false,
 		AutoStartPacService:    false,
 		AutoStartProxyService:  false,
@@ -120,8 +137,10 @@ func (s *Store) ensureInvariants() {
 	if s.cfg.TunMTU <= 0 {
 		s.cfg.TunMTU = 1500
 	}
-	if s.cfg.TunIncludedApps == nil {
-		s.cfg.TunIncludedApps = []string{"Codex.exe"}
+	if s.cfg.TunIncludedApps == nil || isLegacyTunIncludedApps(s.cfg.TunIncludedApps) {
+		s.cfg.TunIncludedApps = defaultTunIncludedAppsCopy()
+	} else {
+		s.cfg.TunIncludedApps = normalizeTunIncludedApps(s.cfg.TunIncludedApps)
 	}
 	if s.cfg.MaxLogEntries <= 0 {
 		s.cfg.MaxLogEntries = 500
@@ -136,6 +155,8 @@ func (s *Store) ensureInvariants() {
 		if rule.ID == "" {
 			rule.ID = uuid.NewString()
 		}
+		rule.Folder = rules.DefaultFolderForRule(rule)
+		rule.Remark = rules.DefaultRemarkForRule(rule)
 		if rule.Type == model.RuleTypeMatch && rule.Target == model.RuleTargetDirect {
 			copyRule := rule
 			fallback = &copyRule
@@ -143,12 +164,55 @@ func (s *Store) ensureInvariants() {
 		}
 		filtered = append(filtered, rule)
 	}
+	for _, builtin := range rules.CommonDomainRules() {
+		exists := false
+		for _, rule := range filtered {
+			if rules.SameRulePattern(rule, builtin) {
+				exists = true
+				break
+			}
+		}
+		if exists {
+			continue
+		}
+		builtin.ID = uuid.NewString()
+		filtered = append(filtered, builtin)
+	}
 	if fallback == nil {
-		rule := model.Rule{ID: uuid.NewString(), Enabled: true, Type: model.RuleTypeMatch, Value: "MATCH", Target: model.RuleTargetDirect, Remark: "Fallback rule"}
+		rule := model.Rule{ID: uuid.NewString(), Enabled: true, Type: model.RuleTypeMatch, Value: "MATCH", Target: model.RuleTargetDirect, Folder: "系统", Remark: "Fallback rule"}
 		fallback = &rule
 	}
 	filtered = append(filtered, *fallback)
 	s.cfg.Rules = filtered
+}
+
+func defaultTunIncludedAppsCopy() []string {
+	out := make([]string, len(defaultTunIncludedApps))
+	copy(out, defaultTunIncludedApps)
+	return out
+}
+
+func isLegacyTunIncludedApps(values []string) bool {
+	normalized := normalizeTunIncludedApps(values)
+	return len(normalized) == 1 && strings.EqualFold(normalized[0], "Codex.exe")
+}
+
+func normalizeTunIncludedApps(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func (s *Store) Load() error {

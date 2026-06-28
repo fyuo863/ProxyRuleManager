@@ -25,12 +25,14 @@ type Rule struct {
 	Type    RuleType   `json:"type"`
 	Value   string     `json:"value"`
 	Target  RuleTarget `json:"target"`
+	Folder  string     `json:"folder"`
 	Remark  string     `json:"remark"`
 }
 
 type BatchRuleRequest struct {
 	Content string     `json:"content"`
 	Target  RuleTarget `json:"target"`
+	Folder  string     `json:"folder"`
 	Remark  string     `json:"remark"`
 	Enabled bool       `json:"enabled"`
 }
@@ -40,6 +42,7 @@ type BatchRuleItem struct {
 	Type      RuleType   `json:"type"`
 	Value     string     `json:"value"`
 	Target    RuleTarget `json:"target"`
+	Folder    string     `json:"folder"`
 	Duplicate bool       `json:"duplicate"`
 }
 

@@ -81,8 +81,8 @@ func listAdaptersScript() string {
 		"$OutputEncoding = [Console]::OutputEncoding\n" +
 		"$ErrorActionPreference = 'Stop'\n" +
 		"Get-NetAdapter -ErrorAction SilentlyContinue |\n" +
-		"Where-Object { $_.HardwareInterface -eq $true -and $_.Status -ne 'Disabled' } |\n" +
-		"Sort-Object @{ Expression = { if ($_.Status -eq 'Up') { 0 } else { 1 } } }, Name |\n" +
+		"Where-Object { $_.HardwareInterface -eq $true } |\n" +
+		"Sort-Object @{ Expression = { if ($_.Status -eq 'Up') { 0 } elseif ($_.Status -eq 'Disconnected') { 1 } else { 2 } } }, Name |\n" +
 		"Select-Object Name, InterfaceDescription, Status |\n" +
 		"ConvertTo-Json -Compress\n"
 }
