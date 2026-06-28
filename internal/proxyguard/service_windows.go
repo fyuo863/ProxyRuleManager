@@ -52,7 +52,7 @@ func (s *WindowsService) Reconcile(cfg model.AppConfig) error {
 
 	paths := normalizePaths(cfg.ProxyGuardProgramPaths)
 	if len(paths) == 0 {
-		err := fmt.Errorf("请至少填写一个受控代理进程路径")
+		err := missingProgramPathsMessage(cfg.FastLinkProxyAddr)
 		s.setStatus(model.ProxyGuardRuntimeStatus{Message: err.Error()})
 		return err
 	}

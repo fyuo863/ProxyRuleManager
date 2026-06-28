@@ -307,7 +307,7 @@ function App() {
       const next = normalizeState(await invoke<AppState>("SaveSettings", settingsDraft));
       applyNextState(next, true);
       setError("");
-      setSettingsMessage("设置已保存到 .PRM 目录");
+      setSettingsMessage("设置已保存到 .PRM 目录；已按当前上游配置自动补全代理出口限制默认值（如适用）");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       try {
@@ -890,7 +890,7 @@ function App() {
                     <input type="checkbox" checked={settingsDraft.proxyGuardEnabled} onChange={(e) => updateSettingsDraft({ proxyGuardEnabled: e.target.checked })} />
                     启用代理进程出口限制
                   </label>
-                  <div className="hint full">当上游代理地址是 `127.0.0.1` 或 `localhost` 时，要固定真正的外网出口，请把实际出网进程填在这里。FastLink 通常优先填写 `FastLinkCore.exe`，需要时再补 `FastLink.exe`。</div>
+                  <div className="hint full">当上游代理地址是 `127.0.0.1` 或 `localhost` 时，要固定真正的外网出口，可以直接启用这里的限制。若“代理进程出口网卡”留空，会默认跟随“上游代理出口网卡”；若“受控代理进程路径”留空，程序会优先尝试按本地监听端口自动识别 FastLink 进程。</div>
                   <label className="full">
                     透明接管应用名单
                     <textarea

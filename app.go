@@ -667,7 +667,12 @@ func (a *App) SaveSettings(next model.AppConfig) (model.AppState, error) {
 	restartProxy := a.proxyRunning
 	restartTun := a.tunRunning
 
-	err := a.config.Update(func(cfg *model.AppConfig) error {
+	prepared, err := proxyguard.PrepareConfig(next)
+	if err == nil {
+		next = prepared
+	}
+
+	err = a.config.Update(func(cfg *model.AppConfig) error {
 		cfg.PacListenAddr = next.PacListenAddr
 		cfg.ProxyListenAddr = next.ProxyListenAddr
 		cfg.FastLinkProxyAddr = next.FastLinkProxyAddr
@@ -789,7 +794,41 @@ func (a *App) reconcileProxyGuard(cfg model.AppConfig) error {
 	if a.proxyGuard == nil {
 		return nil
 	}
+	prepared, err := proxyguard.PrepareConfig(cfg)
+	if err != nil {
+		return err
+	}
+	if a.config != nil && proxyGuardConfigChanged(cfg, prepared) {
+		if updateErr := a.config.Update(func(current *model.AppConfig) error {
+			current.ProxyGuardInterface = prepared.ProxyGuardInterface
+			current.ProxyGuardProgramPaths = prepared.ProxyGuardProgramPaths
+			return nil
+		}); updateErr != nil {
+			return updateErr
+		}
+		if saveErr := a.config.Save(); saveErr != nil {
+			return saveErr
+		}
+		cfg = a.config.Get()
+	} else {
+		cfg = prepared
+	}
 	return a.proxyGuard.Reconcile(cfg)
+}
+
+func proxyGuardConfigChanged(before, after model.AppConfig) bool {
+	if strings.TrimSpace(before.ProxyGuardInterface) != strings.TrimSpace(after.ProxyGuardInterface) {
+		return true
+	}
+	if len(before.ProxyGuardProgramPaths) != len(after.ProxyGuardProgramPaths) {
+		return true
+	}
+	for idx := range before.ProxyGuardProgramPaths {
+		if before.ProxyGuardProgramPaths[idx] != after.ProxyGuardProgramPaths[idx] {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) availableNetworkAdapters(force bool) []model.NetworkAdapterOption {
