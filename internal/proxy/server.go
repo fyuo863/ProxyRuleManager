@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"proxy-rule-manager/internal/model"
+	"proxy-rule-manager/internal/netadapter"
 )
 
 type MatchFunc func(host string) (model.Rule, model.MatchedRule)
@@ -26,6 +27,7 @@ type UpdateLogFunc func(id string, mutator func(*model.TrafficLog))
 type Server struct {
 	addr         string
 	fastLinkAddr string
+	directIface  string
 	match        MatchFunc
 	addLog       AddLogFunc
 	updateLog    UpdateLogFunc
@@ -35,10 +37,11 @@ type Server struct {
 	mu       sync.RWMutex
 }
 
-func NewServer(addr, fastLinkAddr string, match MatchFunc, addLog AddLogFunc, updateLog UpdateLogFunc) *Server {
+func NewServer(addr, fastLinkAddr, directIface string, match MatchFunc, addLog AddLogFunc, updateLog UpdateLogFunc) *Server {
 	return &Server{
 		addr:         addr,
 		fastLinkAddr: fastLinkAddr,
+		directIface:  directIface,
 		match:        match,
 		addLog:       addLog,
 		updateLog:    updateLog,
@@ -73,17 +76,24 @@ func (s *Server) Stop(ctx context.Context) error {
 	return err
 }
 
-func (s *Server) UpdateSettings(addr, fastLinkAddr string) {
+func (s *Server) UpdateSettings(addr, fastLinkAddr, directIface string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.addr = addr
 	s.fastLinkAddr = fastLinkAddr
+	s.directIface = directIface
 }
 
 func (s *Server) currentFastLinkAddr() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.fastLinkAddr
+}
+
+func (s *Server) currentDirectInterface() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.directIface
 }
 
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +244,10 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) connectTunnel(ctx context.Context, target model.RuleTarget, hostPort string) (net.Conn, error) {
 	if target == model.RuleTargetDirect {
-		dialer := &net.Dialer{Timeout: 10 * time.Second}
+		dialer, err := s.buildDirectDialer()
+		if err != nil {
+			return nil, err
+		}
 		return dialer.DialContext(ctx, "tcp", hostPort)
 	}
 
@@ -265,12 +278,18 @@ func (s *Server) connectTunnel(ctx context.Context, target model.RuleTarget, hos
 }
 
 func (s *Server) buildTransport(target model.RuleTarget) http.RoundTripper {
+	dialContext := (&net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	if target == model.RuleTargetDirect {
+		if directDialer, err := s.buildDirectDialer(); err == nil {
+			dialContext = directDialer.DialContext
+		}
+	}
 	transport := &http.Transport{
-		Proxy: nil,
-		DialContext: (&net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		Proxy:                 nil,
+		DialContext:           dialContext,
 		ForceAttemptHTTP2:     false,
 		ResponseHeaderTimeout: 30 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
@@ -280,6 +299,27 @@ func (s *Server) buildTransport(target model.RuleTarget) http.RoundTripper {
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
 	return transport
+}
+
+func (s *Server) buildDirectDialer() (*net.Dialer, error) {
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	iface := strings.TrimSpace(s.currentDirectInterface())
+	if iface == "" {
+		return dialer, nil
+	}
+	ip, err := netadapter.LookupIPv4(iface)
+	if err != nil {
+		fallbackIP, _, fallbackErr := netadapter.LookupFallbackIPv4(iface)
+		if fallbackErr != nil {
+			return nil, err
+		}
+		ip = fallbackIP
+	}
+	dialer.LocalAddr = &net.TCPAddr{IP: ip}
+	return dialer, nil
 }
 
 func (s *Server) finishLog(id string, started time.Time, uploadBytes, downloadBytes int64, status model.TrafficStatus, errMsg string) {

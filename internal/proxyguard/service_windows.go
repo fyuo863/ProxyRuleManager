@@ -155,7 +155,7 @@ func applyRulesScript(allowed string, paths []string) string {
 	builder.WriteString("}\n")
 	builder.WriteString("$allowedAdapter = Get-NetAdapter -Name $allowed -ErrorAction SilentlyContinue\n")
 	builder.WriteString("if (-not $allowedAdapter) { throw \"未找到指定网卡: $allowed\" }\n")
-	builder.WriteString("$blockedAliases = @(Get-NetAdapter | Where-Object { $_.Name -ne $allowed -and $_.Status -ne 'Disabled' -and $_.HardwareInterface -eq $true } | Select-Object -ExpandProperty Name)\n")
+		builder.WriteString("$blockedAliases = @(Get-NetAdapter | Where-Object { $_.Name -ne $allowed -and $_.HardwareInterface -eq $true -and @('Up','Disconnected') -contains $_.Status } | Select-Object -ExpandProperty Name)\n")
 	builder.WriteString("foreach ($program in $resolvedPrograms) {\n")
 	builder.WriteString("  if ($blockedAliases.Count -gt 0) {\n")
 	builder.WriteString("    $display = 'ProxyRuleManager Proxy Guard - ' + [System.IO.Path]::GetFileName($program)\n")

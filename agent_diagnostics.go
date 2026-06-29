@@ -52,13 +52,15 @@ func (a *App) GetAgentDiagnostics() (model.AgentDiagnostics, error) {
 		Paths:               paths,
 		State:               state,
 		ProxyGuard:          proxyGuardStatus,
+		FastLinkRoute:       a.fastLinkRouteStatus,
 		TunStatus:           tunStatus,
 		NetworkAdapters:     state.AvailableNetworkAdapters,
 		DefaultIPv4Routes:   routes,
 		CurrentWindowsProxy: currentProxyPtr,
 		TunConfigPreview:    readTextSnippet(paths.TunConfigPath, 8192, false),
 		TunLogTail:          readTextSnippet(paths.TunLogPath, 16384, true),
-		RecentLogs:          tailTrafficLogs(state.Logs, 120),
+		RecentLogs:          tailTrafficLogs(a.logStore.FullList(), 120),
+		FullLogs:            a.logStore.FullList(),
 	}
 	return diagnostics, nil
 }

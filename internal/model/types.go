@@ -103,6 +103,9 @@ type AppConfig struct {
 	FastLinkProxyAddr      string              `json:"fastLinkProxyAddr"`
 	FastLinkProxyType      string              `json:"fastLinkProxyType"`
 	ProxyInterfaceName     string              `json:"proxyInterfaceName"`
+	FastLinkRouteEnabled   bool                `json:"fastLinkRouteEnabled"`
+	FastLinkRouteInterface string              `json:"fastLinkRouteInterface"`
+	FastLinkRouteTargets   []string            `json:"fastLinkRouteTargets"`
 	ProxyGuardEnabled      bool                `json:"proxyGuardEnabled"`
 	ProxyGuardInterface    string              `json:"proxyGuardInterface"`
 	ProxyGuardProgramPaths []string            `json:"proxyGuardProgramPaths"`
@@ -134,6 +137,9 @@ type ServiceStatus struct {
 	PacURL                 string `json:"pacUrl"`
 	ProxyRunning           bool   `json:"proxyRunning"`
 	ProxyAddr              string `json:"proxyAddr"`
+	FastLinkRouteApplied   bool   `json:"fastLinkRouteApplied"`
+	FastLinkRouteMessage   string `json:"fastLinkRouteMessage"`
+	FastLinkRouteCount     int    `json:"fastLinkRouteCount"`
 	ProxyGuardApplied      bool   `json:"proxyGuardApplied"`
 	ProxyGuardMessage      string `json:"proxyGuardMessage"`
 	ProxyGuardProgramCount int    `json:"proxyGuardProgramCount"`
@@ -162,6 +168,15 @@ type ProxyGuardRuntimeStatus struct {
 	Message               string `json:"message"`
 	ProgramCount          int    `json:"programCount"`
 	BlockedInterfaceCount int    `json:"blockedInterfaceCount"`
+}
+
+type FastLinkRouteStatus struct {
+	Applied        bool     `json:"applied"`
+	Message        string   `json:"message"`
+	InterfaceAlias string   `json:"interfaceAlias"`
+	Gateway        string   `json:"gateway"`
+	RouteCount     int      `json:"routeCount"`
+	Targets        []string `json:"targets"`
 }
 
 type NetworkAdapterOption struct {
@@ -197,6 +212,7 @@ type AgentDiagnostics struct {
 	Paths               DiagnosticPaths         `json:"paths"`
 	State               AppState                `json:"state"`
 	ProxyGuard          ProxyGuardRuntimeStatus `json:"proxyGuard"`
+	FastLinkRoute       FastLinkRouteStatus     `json:"fastLinkRoute"`
 	TunStatus           TunRuntimeStatus        `json:"tunStatus"`
 	NetworkAdapters     []NetworkAdapterOption  `json:"networkAdapters"`
 	DefaultIPv4Routes   []NetworkRoute          `json:"defaultIpv4Routes"`
@@ -204,6 +220,7 @@ type AgentDiagnostics struct {
 	TunConfigPreview    string                  `json:"tunConfigPreview"`
 	TunLogTail          string                  `json:"tunLogTail"`
 	RecentLogs          []TrafficLog            `json:"recentLogs"`
+	FullLogs            []TrafficLog            `json:"fullLogs"`
 }
 
 type AppState struct {

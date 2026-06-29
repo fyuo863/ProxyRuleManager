@@ -21,6 +21,9 @@ const emptyState: AppState = {
     fastLinkProxyAddr: "127.0.0.1:7892",
     fastLinkProxyType: "http",
     proxyInterfaceName: "",
+    fastLinkRouteEnabled: false,
+    fastLinkRouteInterface: "",
+    fastLinkRouteTargets: [],
     proxyGuardEnabled: false,
     proxyGuardInterface: "",
     proxyGuardProgramPaths: [],
@@ -42,6 +45,9 @@ const emptyState: AppState = {
     pacUrl: "",
     proxyRunning: false,
     proxyAddr: "",
+    fastLinkRouteApplied: false,
+    fastLinkRouteMessage: "",
+    fastLinkRouteCount: 0,
     proxyGuardApplied: false,
     proxyGuardMessage: "",
     proxyGuardProgramCount: 0,
@@ -95,6 +101,7 @@ const normalizeConfig = (config?: Partial<AppConfig> | null): AppConfig => ({
   ...config,
   rules: Array.isArray(config?.rules) ? config.rules : emptyState.config.rules,
   proxyGuardProgramPaths: Array.isArray(config?.proxyGuardProgramPaths) ? config.proxyGuardProgramPaths : emptyState.config.proxyGuardProgramPaths,
+  fastLinkRouteTargets: Array.isArray(config?.fastLinkRouteTargets) ? config.fastLinkRouteTargets : emptyState.config.fastLinkRouteTargets,
   tunIncludedApps: Array.isArray(config?.tunIncludedApps) ? config.tunIncludedApps : emptyState.config.tunIncludedApps,
   savedWindowsProxyConfig: config?.savedWindowsProxyConfig ?? null,
 });
@@ -191,10 +198,11 @@ function App() {
   const adapterOptions = useMemo(
     () => buildAdapterOptions(state.availableNetworkAdapters, [
       settingsDraft.proxyInterfaceName,
+      settingsDraft.fastLinkRouteInterface,
       settingsDraft.proxyGuardInterface,
       settingsDraft.directInterfaceName,
     ]),
-    [settingsDraft.directInterfaceName, settingsDraft.proxyGuardInterface, settingsDraft.proxyInterfaceName, state.availableNetworkAdapters],
+    [settingsDraft.directInterfaceName, settingsDraft.fastLinkRouteInterface, settingsDraft.proxyGuardInterface, settingsDraft.proxyInterfaceName, state.availableNetworkAdapters],
   );
 
   const applyNextState = (next: AppState, syncSettings = false) => {
@@ -441,6 +449,7 @@ function App() {
                 <StatusCard title="本地分流代理" value={state.status.proxyRunning ? "运行中" : "未运行"} meta={state.status.proxyAddr} accent={state.status.proxyRunning} />
                 <StatusCard title="系统 PAC" value={state.status.systemPacEnabled ? "已启用" : "未启用"} meta={state.status.currentAutoConfigURL || "未设置"} accent={state.status.systemPacEnabled} />
                 <StatusCard title="上游代理" value={state.status.fastLinkReachable ? "可连接" : "不可连接"} meta={state.status.fastLinkMessage} accent={state.status.fastLinkReachable} />
+                <StatusCard title="FastLink 节点路由" value={state.status.fastLinkRouteApplied ? "已应用" : "未应用"} meta={state.status.fastLinkRouteMessage || "未配置"} accent={state.status.fastLinkRouteApplied} />
                 <StatusCard title="代理出口限制" value={state.config.proxyGuardEnabled ? (state.status.proxyGuardApplied ? "已应用" : "待处理") : "未启用"} meta={state.status.proxyGuardMessage || "未配置"} accent={state.status.proxyGuardApplied} />
               </div>
             </div>
@@ -483,6 +492,9 @@ function App() {
               </div>
               <div className="hint">
                 代理出口限制: {state.status.proxyGuardMessage || "未检测"}
+              </div>
+              <div className="hint">
+                FastLink 节点路由: {state.status.fastLinkRouteMessage || "未检测"}
               </div>
               <div className="console-actions secondary-actions">
                 <button className="ghost" onClick={() => void runAction(() => invoke("PauseTrafficRouting"))}>暂停分流</button>
@@ -853,6 +865,15 @@ function App() {
                     </select>
                   </label>
                   <label>
+                    FastLink 节点路由网卡
+                    <select value={settingsDraft.fastLinkRouteInterface} onChange={(e) => updateSettingsDraft({ fastLinkRouteInterface: e.target.value })}>
+                      <option value="">跟随上游代理出口网卡</option>
+                      {adapterOptions.map((adapter) => (
+                        <option key={`fastlink-route-${adapter.name}`} value={adapter.name}>{formatAdapterLabel(adapter)}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
                     代理进程出口网卡
                     <select value={settingsDraft.proxyGuardInterface} onChange={(e) => updateSettingsDraft({ proxyGuardInterface: e.target.value })}>
                       <option value="">未指定</option>
@@ -877,6 +898,20 @@ function App() {
                     日志上限
                     <input type="number" min={100} max={5000} value={settingsDraft.maxLogEntries} onChange={(e) => updateSettingsDraft({ maxLogEntries: Number(e.target.value) })} />
                   </label>
+                  <label className="full">
+                    FastLink 节点 IP
+                    <textarea
+                      rows={3}
+                      value={(settingsDraft.fastLinkRouteTargets ?? []).join("\n")}
+                      onChange={(e) => updateSettingsDraft({ fastLinkRouteTargets: e.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
+                      placeholder={"203.0.113.10\n198.51.100.8/32"}
+                    />
+                  </label>
+                  <label className="check full">
+                    <input type="checkbox" checked={settingsDraft.fastLinkRouteEnabled} onChange={(e) => updateSettingsDraft({ fastLinkRouteEnabled: e.target.checked })} />
+                    启用 FastLink 节点 /32 路由
+                  </label>
+                  <div className="hint full">启用后，程序会把手动填写的节点 IP，以及自动识别到的 FastLink / FastLinkCore 当前远端 IPv4，添加为 `/32` 路由并指向所选 Wi-Fi 网关；不会调整全局网卡 metric。</div>
                   <label className="full">
                     受控代理进程路径
                     <textarea

@@ -72,6 +72,9 @@ export interface AppConfig {
   fastLinkProxyAddr: string;
   fastLinkProxyType: string;
   proxyInterfaceName: string;
+  fastLinkRouteEnabled: boolean;
+  fastLinkRouteInterface: string;
+  fastLinkRouteTargets: string[];
   proxyGuardEnabled: boolean;
   proxyGuardInterface: string;
   proxyGuardProgramPaths: string[];
@@ -133,6 +136,15 @@ export interface ProxyGuardRuntimeStatus {
   blockedInterfaceCount: number;
 }
 
+export interface FastLinkRouteStatus {
+  applied: boolean;
+  message: string;
+  interfaceAlias: string;
+  gateway: string;
+  routeCount: number;
+  targets: string[];
+}
+
 export interface TunRuntimeStatus {
   running: boolean;
   available: boolean;
@@ -146,6 +158,7 @@ export interface AgentDiagnostics {
   paths: DiagnosticPaths;
   state: AppState;
   proxyGuard: ProxyGuardRuntimeStatus;
+  fastLinkRoute: FastLinkRouteStatus;
   tunStatus: TunRuntimeStatus;
   networkAdapters: NetworkAdapterOption[];
   defaultIpv4Routes: NetworkRoute[];
@@ -160,6 +173,9 @@ export interface ServiceStatus {
   pacUrl: string;
   proxyRunning: boolean;
   proxyAddr: string;
+  fastLinkRouteApplied: boolean;
+  fastLinkRouteMessage: string;
+  fastLinkRouteCount: number;
   proxyGuardApplied: boolean;
   proxyGuardMessage: string;
   proxyGuardProgramCount: number;

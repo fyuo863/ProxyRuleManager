@@ -44,6 +44,28 @@ export namespace model {
 	        this.byteCount = source["byteCount"];
 	    }
 	}
+	export class FastLinkRouteStatus {
+	    applied: boolean;
+	    message: string;
+	    interfaceAlias: string;
+	    gateway: string;
+	    routeCount: number;
+	    targets: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new FastLinkRouteStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.applied = source["applied"];
+	        this.message = source["message"];
+	        this.interfaceAlias = source["interfaceAlias"];
+	        this.gateway = source["gateway"];
+	        this.routeCount = source["routeCount"];
+	        this.targets = source["targets"];
+	    }
+	}
 	export class ProxyGuardRuntimeStatus {
 	    applied: boolean;
 	    message: string;
@@ -153,6 +175,9 @@ export namespace model {
 	    pacUrl: string;
 	    proxyRunning: boolean;
 	    proxyAddr: string;
+	    fastLinkRouteApplied: boolean;
+	    fastLinkRouteMessage: string;
+	    fastLinkRouteCount: number;
 	    proxyGuardApplied: boolean;
 	    proxyGuardMessage: string;
 	    proxyGuardProgramCount: number;
@@ -185,6 +210,9 @@ export namespace model {
 	        this.pacUrl = source["pacUrl"];
 	        this.proxyRunning = source["proxyRunning"];
 	        this.proxyAddr = source["proxyAddr"];
+	        this.fastLinkRouteApplied = source["fastLinkRouteApplied"];
+	        this.fastLinkRouteMessage = source["fastLinkRouteMessage"];
+	        this.fastLinkRouteCount = source["fastLinkRouteCount"];
 	        this.proxyGuardApplied = source["proxyGuardApplied"];
 	        this.proxyGuardMessage = source["proxyGuardMessage"];
 	        this.proxyGuardProgramCount = source["proxyGuardProgramCount"];
@@ -255,6 +283,9 @@ export namespace model {
 	    fastLinkProxyAddr: string;
 	    fastLinkProxyType: string;
 	    proxyInterfaceName: string;
+	    fastLinkRouteEnabled: boolean;
+	    fastLinkRouteInterface: string;
+	    fastLinkRouteTargets: string[];
 	    proxyGuardEnabled: boolean;
 	    proxyGuardInterface: string;
 	    proxyGuardProgramPaths: string[];
@@ -283,6 +314,9 @@ export namespace model {
 	        this.fastLinkProxyAddr = source["fastLinkProxyAddr"];
 	        this.fastLinkProxyType = source["fastLinkProxyType"];
 	        this.proxyInterfaceName = source["proxyInterfaceName"];
+	        this.fastLinkRouteEnabled = source["fastLinkRouteEnabled"];
+	        this.fastLinkRouteInterface = source["fastLinkRouteInterface"];
+	        this.fastLinkRouteTargets = source["fastLinkRouteTargets"];
 	        this.proxyGuardEnabled = source["proxyGuardEnabled"];
 	        this.proxyGuardInterface = source["proxyGuardInterface"];
 	        this.proxyGuardProgramPaths = source["proxyGuardProgramPaths"];
@@ -389,6 +423,7 @@ export namespace model {
 	    paths: DiagnosticPaths;
 	    state: AppState;
 	    proxyGuard: ProxyGuardRuntimeStatus;
+	    fastLinkRoute: FastLinkRouteStatus;
 	    tunStatus: TunRuntimeStatus;
 	    networkAdapters: NetworkAdapterOption[];
 	    defaultIpv4Routes: NetworkRoute[];
@@ -396,6 +431,7 @@ export namespace model {
 	    tunConfigPreview: string;
 	    tunLogTail: string;
 	    recentLogs: TrafficLog[];
+	    fullLogs: TrafficLog[];
 	
 	    static createFrom(source: any = {}) {
 	        return new AgentDiagnostics(source);
@@ -407,6 +443,7 @@ export namespace model {
 	        this.paths = this.convertValues(source["paths"], DiagnosticPaths);
 	        this.state = this.convertValues(source["state"], AppState);
 	        this.proxyGuard = this.convertValues(source["proxyGuard"], ProxyGuardRuntimeStatus);
+	        this.fastLinkRoute = this.convertValues(source["fastLinkRoute"], FastLinkRouteStatus);
 	        this.tunStatus = this.convertValues(source["tunStatus"], TunRuntimeStatus);
 	        this.networkAdapters = this.convertValues(source["networkAdapters"], NetworkAdapterOption);
 	        this.defaultIpv4Routes = this.convertValues(source["defaultIpv4Routes"], NetworkRoute);
@@ -414,6 +451,7 @@ export namespace model {
 	        this.tunConfigPreview = source["tunConfigPreview"];
 	        this.tunLogTail = source["tunLogTail"];
 	        this.recentLogs = this.convertValues(source["recentLogs"], TrafficLog);
+	        this.fullLogs = this.convertValues(source["fullLogs"], TrafficLog);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -516,6 +554,7 @@ export namespace model {
 		    return a;
 		}
 	}
+	
 	
 	
 	

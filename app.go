@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"proxy-rule-manager/internal/logs"
 	"proxy-rule-manager/internal/model"
 	"proxy-rule-manager/internal/netadapter"
+	"proxy-rule-manager/internal/netroute"
 	"proxy-rule-manager/internal/pac"
 	"proxy-rule-manager/internal/prmfs"
 	"proxy-rule-manager/internal/proxy"
@@ -29,21 +32,23 @@ import (
 )
 
 type App struct {
-	ctx          context.Context
-	config       *config.Store
-	ruleEngine   *rules.Engine
-	logStore     *logs.Store
-	pacServer    *pac.Server
-	proxySrv     *proxy.Server
-	appMonitor   appmonitor.Service
-	proxyGuard   proxyguard.Service
-	tunService   tun.Service
-	adaptersSeen []model.NetworkAdapterOption
-	adaptersAt   time.Time
-	pacRunning   bool
-	proxyRunning bool
-	tunRunning   bool
-	lastError    string
+	ctx                 context.Context
+	config              *config.Store
+	ruleEngine          *rules.Engine
+	logStore            *logs.Store
+	pacServer           *pac.Server
+	proxySrv            *proxy.Server
+	appMonitor          appmonitor.Service
+	proxyGuard          proxyguard.Service
+	tunService          tun.Service
+	adaptersSeen        []model.NetworkAdapterOption
+	adaptersAt          time.Time
+	fastLinkRouteStatus model.FastLinkRouteStatus
+	pacRunning          bool
+	proxyRunning        bool
+	tunRunning          bool
+	lastError           string
+	systemPacGuardStop  chan struct{}
 }
 
 func NewApp() *App {
@@ -76,6 +81,9 @@ func (a *App) startup(ctx context.Context) {
 	if err := a.reconcileProxyGuard(store.Get()); err != nil {
 		a.lastError = err.Error()
 	}
+	if err := a.reconcileFastLinkRoutes(store.Get()); err != nil {
+		a.lastError = err.Error()
+	}
 
 	cfg := a.config.Get()
 	if cfg.AutoStartPacService {
@@ -85,26 +93,23 @@ func (a *App) startup(ctx context.Context) {
 		_ = a.StartProxyService()
 	}
 	if cfg.AutoEnableSystemPac {
-		if !a.pacRunning {
-			_ = a.StartPacService()
-		}
-		if !a.proxyRunning {
-			_ = a.StartProxyService()
-		}
 		_ = a.EnableSystemPac()
 	}
 	if cfg.AutoStartTunService {
 		_ = a.StartTunService()
 	}
+	a.startSystemPacGuard()
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	a.stopSystemPacGuard()
 	if a.config != nil {
 		cfg := a.config.Get()
 		if cfg.DisableSystemPacOnExit && cfg.SavedWindowsProxy != nil {
 			_ = winproxy.Restore(*cfg.SavedWindowsProxy)
 		}
 	}
+	_ = a.clearFastLinkRoutes()
 	a.stopServers()
 }
 
@@ -112,7 +117,7 @@ func (a *App) rebuildServices() {
 	cfg := a.config.Get()
 	a.logStore.SetMax(cfg.MaxLogEntries)
 	a.pacServer = pac.NewServer(cfg.PacListenAddr, cfg.ProxyListenAddr)
-	a.proxySrv = proxy.NewServer(cfg.ProxyListenAddr, cfg.FastLinkProxyAddr, a.matchRule, a.addLog, a.updateLog)
+	a.proxySrv = proxy.NewServer(cfg.ProxyListenAddr, cfg.FastLinkProxyAddr, cfg.DirectInterfaceName, a.matchRule, a.addLog, a.updateLog)
 }
 
 func (a *App) stopServers() {
@@ -133,6 +138,60 @@ func (a *App) stopServers() {
 	a.pacRunning = false
 	a.proxyRunning = false
 	a.tunRunning = false
+}
+
+func (a *App) startSystemPacGuard() {
+	if a.systemPacGuardStop != nil {
+		return
+	}
+	stopCh := make(chan struct{})
+	a.systemPacGuardStop = stopCh
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				a.ensureSystemPacOwnership()
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+}
+
+func (a *App) stopSystemPacGuard() {
+	if a.systemPacGuardStop == nil {
+		return
+	}
+	close(a.systemPacGuardStop)
+	a.systemPacGuardStop = nil
+}
+
+func (a *App) ensureSystemPacOwnership() {
+	if a.config == nil {
+		return
+	}
+	cfg := a.config.Get()
+	if !cfg.AutoEnableSystemPac {
+		return
+	}
+	if err := a.ensurePacProxyChainReady(cfg); err != nil {
+		a.lastError = err.Error()
+		a.emitState()
+		return
+	}
+	current, err := winproxy.ReadCurrentConfig()
+	if err != nil {
+		a.lastError = err.Error()
+		a.emitState()
+		return
+	}
+	expectedURL := "http://" + cfg.PacListenAddr + "/proxy.pac"
+	if current.AutoConfigURL == expectedURL && !current.ProxyEnable && current.ProxyServer == "" {
+		return
+	}
+	_ = a.EnableSystemPac()
 }
 
 func (a *App) matchRule(host string) (model.Rule, model.MatchedRule) {
@@ -172,6 +231,8 @@ func (a *App) getState(forceAdapters bool) model.AppState {
 	}
 
 	fastLinkReachable, fastLinkMessage := a.probeFastLink(cfg.FastLinkProxyAddr)
+	pacReady := a.pacRunning && a.probePacServer(cfg) == nil
+	proxyReady := a.proxyRunning && probeTCP(cfg.ProxyListenAddr) == nil
 
 	enabledRules := 0
 	for _, rule := range cfg.Rules {
@@ -203,10 +264,13 @@ func (a *App) getState(forceAdapters bool) model.AppState {
 	return model.AppState{
 		Config: cfg,
 		Status: model.ServiceStatus{
-			PacRunning:             a.pacRunning,
+			PacRunning:             pacReady,
 			PacURL:                 "http://" + cfg.PacListenAddr + "/proxy.pac",
-			ProxyRunning:           a.proxyRunning,
+			ProxyRunning:           proxyReady,
 			ProxyAddr:              cfg.ProxyListenAddr,
+			FastLinkRouteApplied:   a.fastLinkRouteStatus.Applied,
+			FastLinkRouteMessage:   a.fastLinkRouteStatus.Message,
+			FastLinkRouteCount:     a.fastLinkRouteStatus.RouteCount,
 			ProxyGuardApplied:      proxyGuardStatus.Applied,
 			ProxyGuardMessage:      proxyGuardStatus.Message,
 			ProxyGuardProgramCount: proxyGuardStatus.ProgramCount,
@@ -313,8 +377,12 @@ func sameEndpointHost(observed, configured string) bool {
 }
 
 func (a *App) StartPacService() error {
+	cfg := a.config.Get()
 	if a.pacRunning {
-		return nil
+		if err := a.probePacServer(cfg); err == nil {
+			return nil
+		}
+		a.resetPacService(cfg)
 	}
 	if a.pacServer == nil {
 		a.rebuildServices()
@@ -348,8 +416,12 @@ func (a *App) StopPacService() error {
 }
 
 func (a *App) StartProxyService() error {
+	cfg := a.config.Get()
 	if a.proxyRunning {
-		return nil
+		if err := probeTCP(cfg.ProxyListenAddr); err == nil {
+			return nil
+		}
+		a.resetProxyService(cfg)
 	}
 	if a.proxySrv == nil {
 		a.rebuildServices()
@@ -376,7 +448,7 @@ func (a *App) StopProxyService() error {
 		return err
 	}
 	cfg := a.config.Get()
-	a.proxySrv = proxy.NewServer(cfg.ProxyListenAddr, cfg.FastLinkProxyAddr, a.matchRule, a.addLog, a.updateLog)
+	a.proxySrv = proxy.NewServer(cfg.ProxyListenAddr, cfg.FastLinkProxyAddr, cfg.DirectInterfaceName, a.matchRule, a.addLog, a.updateLog)
 	a.proxyRunning = false
 	a.emitState()
 	return nil
@@ -442,6 +514,10 @@ func (a *App) PauseTrafficRouting() (model.AppState, error) {
 
 	cfg := a.config.Get()
 	cfg.ProxyGuardEnabled = false
+	cfg.FastLinkRouteEnabled = false
+	if err := a.reconcileFastLinkRoutes(cfg); err != nil {
+		errs = append(errs, err)
+	}
 	if err := a.reconcileProxyGuard(cfg); err != nil {
 		errs = append(errs, err)
 	}
@@ -458,8 +534,10 @@ func (a *App) PauseTrafficRouting() (model.AppState, error) {
 
 func (a *App) EnableSystemPac() error {
 	cfg := a.config.Get()
-	if !a.pacRunning || !a.proxyRunning {
-		return errors.New("启用系统 PAC 前，请先启动 PAC 服务和本地分流代理")
+	if err := a.ensurePacProxyChainReady(cfg); err != nil {
+		a.lastError = err.Error()
+		a.emitState()
+		return err
 	}
 
 	if current, err := winproxy.ReadCurrentConfig(); err == nil && cfg.SavedWindowsProxy == nil {
@@ -481,6 +559,75 @@ func (a *App) EnableSystemPac() error {
 	return nil
 }
 
+func (a *App) ensurePacProxyChainReady(cfg model.AppConfig) error {
+	if err := a.StartPacService(); err != nil {
+		return fmt.Errorf("PAC 服务启动失败: %w", err)
+	}
+	if err := a.StartProxyService(); err != nil {
+		return fmt.Errorf("本地分流代理启动失败: %w", err)
+	}
+	if err := a.probePacServer(cfg); err != nil {
+		return fmt.Errorf("PAC 服务未就绪: %w", err)
+	}
+	if err := probeTCP(cfg.ProxyListenAddr); err != nil {
+		return fmt.Errorf("本地分流代理未就绪: %w", err)
+	}
+	if ok, message := a.probeFastLink(cfg.FastLinkProxyAddr); !ok {
+		return fmt.Errorf("FastLink 上游不可用: %s", message)
+	}
+	return nil
+}
+
+func (a *App) resetPacService(cfg model.AppConfig) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if a.pacServer != nil {
+		_ = a.pacServer.Stop(ctx)
+	}
+	a.pacServer = pac.NewServer(cfg.PacListenAddr, cfg.ProxyListenAddr)
+	a.pacRunning = false
+}
+
+func (a *App) resetProxyService(cfg model.AppConfig) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if a.proxySrv != nil {
+		_ = a.proxySrv.Stop(ctx)
+	}
+	a.proxySrv = proxy.NewServer(cfg.ProxyListenAddr, cfg.FastLinkProxyAddr, cfg.DirectInterfaceName, a.matchRule, a.addLog, a.updateLog)
+	a.proxyRunning = false
+}
+
+func (a *App) probePacServer(cfg model.AppConfig) error {
+	url := "http://" + cfg.PacListenAddr + "/proxy.pac"
+	client := http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s returned %s", url, resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return err
+	}
+	expected := "PROXY " + cfg.ProxyListenAddr
+	if !strings.Contains(string(body), expected) {
+		return fmt.Errorf("PAC does not point to %s", cfg.ProxyListenAddr)
+	}
+	return nil
+}
+
+func probeTCP(addr string) error {
+	conn, err := net.DialTimeout("tcp", strings.TrimSpace(addr), 1200*time.Millisecond)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
+}
+
 func (a *App) DisableSystemPac() error {
 	cfg := a.config.Get()
 	if cfg.SavedWindowsProxy == nil {
@@ -496,6 +643,12 @@ func (a *App) DisableSystemPac() error {
 }
 
 func (a *App) RefreshStatus() model.AppState {
+	cfg := a.config.Get()
+	if cfg.FastLinkRouteEnabled {
+		if err := a.reconcileFastLinkRoutes(cfg); err != nil {
+			a.lastError = err.Error()
+		}
+	}
 	return a.getState(true)
 }
 
@@ -678,6 +831,9 @@ func (a *App) SaveSettings(next model.AppConfig) (model.AppState, error) {
 		cfg.FastLinkProxyAddr = next.FastLinkProxyAddr
 		cfg.FastLinkProxyType = next.FastLinkProxyType
 		cfg.ProxyInterfaceName = next.ProxyInterfaceName
+		cfg.FastLinkRouteEnabled = next.FastLinkRouteEnabled
+		cfg.FastLinkRouteInterface = next.FastLinkRouteInterface
+		cfg.FastLinkRouteTargets = next.FastLinkRouteTargets
 		cfg.ProxyGuardEnabled = next.ProxyGuardEnabled
 		cfg.ProxyGuardInterface = next.ProxyGuardInterface
 		cfg.ProxyGuardProgramPaths = next.ProxyGuardProgramPaths
@@ -729,7 +885,26 @@ func (a *App) SaveSettings(next model.AppConfig) (model.AppState, error) {
 			return a.GetState(), err
 		}
 	}
+	if next.AutoEnableSystemPac {
+		if !a.pacRunning {
+			if err := a.StartPacService(); err != nil {
+				return a.GetState(), err
+			}
+		}
+		if !a.proxyRunning {
+			if err := a.StartProxyService(); err != nil {
+				return a.GetState(), err
+			}
+		}
+		if err := a.EnableSystemPac(); err != nil {
+			return a.GetState(), err
+		}
+	}
 	if err := a.reconcileProxyGuard(a.config.Get()); err != nil {
+		a.lastError = err.Error()
+		return a.GetState(), err
+	}
+	if err := a.reconcileFastLinkRoutes(a.config.Get()); err != nil {
 		a.lastError = err.Error()
 		return a.GetState(), err
 	}
@@ -814,6 +989,31 @@ func (a *App) reconcileProxyGuard(cfg model.AppConfig) error {
 		cfg = prepared
 	}
 	return a.proxyGuard.Reconcile(cfg)
+}
+
+func (a *App) reconcileFastLinkRoutes(cfg model.AppConfig) error {
+	status, err := netroute.ReconcileFastLinkRoutes(netroute.FastLinkRouteOptions{
+		Enabled:         cfg.FastLinkRouteEnabled,
+		InterfaceAlias:  cfg.FastLinkRouteInterface,
+		FallbackAlias:   cfg.ProxyInterfaceName,
+		UpstreamAddr:    cfg.FastLinkProxyAddr,
+		ProgramPaths:    cfg.ProxyGuardProgramPaths,
+		ManualTargets:   cfg.FastLinkRouteTargets,
+		PreviousTargets: a.fastLinkRouteStatus.Targets,
+		PreviousGateway: a.fastLinkRouteStatus.Gateway,
+	})
+	a.fastLinkRouteStatus = status
+	return err
+}
+
+func (a *App) clearFastLinkRoutes() error {
+	if len(a.fastLinkRouteStatus.Targets) == 0 {
+		a.fastLinkRouteStatus = model.FastLinkRouteStatus{Message: "未启用 FastLink 节点路由"}
+		return nil
+	}
+	err := netroute.ClearFastLinkRoutes(a.fastLinkRouteStatus.Targets, a.fastLinkRouteStatus.Gateway)
+	a.fastLinkRouteStatus = model.FastLinkRouteStatus{Message: "未启用 FastLink 节点路由"}
+	return err
 }
 
 func proxyGuardConfigChanged(before, after model.AppConfig) bool {

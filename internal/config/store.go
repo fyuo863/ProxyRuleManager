@@ -55,6 +55,9 @@ func defaultConfig() model.AppConfig {
 		FastLinkProxyAddr:      "127.0.0.1:7892",
 		FastLinkProxyType:      "http",
 		ProxyInterfaceName:     "",
+		FastLinkRouteEnabled:   false,
+		FastLinkRouteInterface: "",
+		FastLinkRouteTargets:   []string{},
 		ProxyGuardEnabled:      false,
 		ProxyGuardInterface:    "",
 		ProxyGuardProgramPaths: []string{},
@@ -122,6 +125,7 @@ func (s *Store) ensureInvariants() {
 	if s.cfg.ProxyInterfaceName == "" {
 		s.cfg.ProxyInterfaceName = ""
 	}
+	s.cfg.FastLinkRouteTargets = normalizeStringList(s.cfg.FastLinkRouteTargets)
 	if s.cfg.ProxyGuardInterface == "" {
 		s.cfg.ProxyGuardInterface = ""
 	}
@@ -198,6 +202,10 @@ func isLegacyTunIncludedApps(values []string) bool {
 }
 
 func normalizeTunIncludedApps(values []string) []string {
+	return normalizeStringList(values)
+}
+
+func normalizeStringList(values []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(values))
 	for _, value := range values {
