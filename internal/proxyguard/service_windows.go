@@ -52,7 +52,7 @@ func (s *WindowsService) Reconcile(cfg model.AppConfig) error {
 
 	paths := normalizePaths(cfg.ProxyGuardProgramPaths)
 	if len(paths) == 0 {
-		err := missingProgramPathsMessage(cfg.FastLinkProxyAddr)
+		err := missingProgramPathsMessage(cfg.UpstreamProxyAddr)
 		s.setStatus(model.ProxyGuardRuntimeStatus{Message: err.Error()})
 		return err
 	}
@@ -155,7 +155,7 @@ func applyRulesScript(allowed string, paths []string) string {
 	builder.WriteString("}\n")
 	builder.WriteString("$allowedAdapter = Get-NetAdapter -Name $allowed -ErrorAction SilentlyContinue\n")
 	builder.WriteString("if (-not $allowedAdapter) { throw \"未找到指定网卡: $allowed\" }\n")
-		builder.WriteString("$blockedAliases = @(Get-NetAdapter | Where-Object { $_.Name -ne $allowed -and $_.HardwareInterface -eq $true -and @('Up','Disconnected') -contains $_.Status } | Select-Object -ExpandProperty Name)\n")
+	builder.WriteString("$blockedAliases = @(Get-NetAdapter | Where-Object { $_.Name -ne $allowed -and $_.HardwareInterface -eq $true -and @('Up','Disconnected') -contains $_.Status } | Select-Object -ExpandProperty Name)\n")
 	builder.WriteString("foreach ($program in $resolvedPrograms) {\n")
 	builder.WriteString("  if ($blockedAliases.Count -gt 0) {\n")
 	builder.WriteString("    $display = 'ProxyRuleManager Proxy Guard - ' + [System.IO.Path]::GetFileName($program)\n")

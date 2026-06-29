@@ -8,7 +8,7 @@ import (
 	"proxy-rule-manager/internal/model"
 )
 
-type FastLinkRouteOptions struct {
+type UpstreamProxyRouteOptions struct {
 	Enabled         bool
 	InterfaceAlias  string
 	FallbackAlias   string
@@ -23,15 +23,15 @@ func ListDefaultIPv4Routes() ([]model.NetworkRoute, error) {
 	return listDefaultIPv4Routes()
 }
 
-func ReconcileFastLinkRoutes(options FastLinkRouteOptions) (model.FastLinkRouteStatus, error) {
+func ReconcileUpstreamProxyRoutes(options UpstreamProxyRouteOptions) (model.UpstreamProxyRouteStatus, error) {
 	if len(options.PreviousTargets) > 0 {
-		if err := removeFastLinkRoutes(NormalizeIPv4Targets(options.PreviousTargets), options.PreviousGateway); err != nil {
-			return model.FastLinkRouteStatus{Message: "清理旧 FastLink 节点路由失败: " + err.Error()}, err
+		if err := removeUpstreamProxyRoutes(NormalizeIPv4Targets(options.PreviousTargets), options.PreviousGateway); err != nil {
+			return model.UpstreamProxyRouteStatus{Message: "清理旧代理节点路由失败: " + err.Error()}, err
 		}
 	}
 
 	if !options.Enabled {
-		return model.FastLinkRouteStatus{Message: "未启用 FastLink 节点路由"}, nil
+		return model.UpstreamProxyRouteStatus{Message: "未启用代理节点路由"}, nil
 	}
 
 	iface := strings.TrimSpace(options.InterfaceAlias)
@@ -39,36 +39,36 @@ func ReconcileFastLinkRoutes(options FastLinkRouteOptions) (model.FastLinkRouteS
 		iface = strings.TrimSpace(options.FallbackAlias)
 	}
 	if iface == "" {
-		return model.FastLinkRouteStatus{Message: "请先选择 FastLink / 上游代理出口网卡"}, fmt.Errorf("fastlink route interface is empty")
+		return model.UpstreamProxyRouteStatus{Message: "请先选择上游代理出口网卡"}, fmt.Errorf("upstream proxy route interface is empty")
 	}
 
 	targets := NormalizeIPv4Targets(options.ManualTargets)
-	discovered, discoverErr := discoverFastLinkRemoteIPs(options.UpstreamAddr, options.ProgramPaths)
+	discovered, discoverErr := discoverUpstreamProxyRemoteIPs(options.UpstreamAddr, options.ProgramPaths)
 	targets = NormalizeIPv4Targets(append(targets, discovered...))
 	if len(targets) == 0 {
-		message := "未发现可添加的 FastLink 节点 IPv4；请先让 FastLink 建立连接，或手动填写节点 IP"
+		message := "未发现可添加的代理节点 IPv4；请先让上游代理建立连接，或手动填写节点 IP"
 		if discoverErr != nil {
 			message += ": " + discoverErr.Error()
 		}
-		return model.FastLinkRouteStatus{
+		return model.UpstreamProxyRouteStatus{
 			Message:        message,
 			InterfaceAlias: iface,
 		}, nil
 	}
 
-	gateway, err := applyFastLinkRoutes(iface, targets)
+	gateway, err := applyUpstreamProxyRoutes(iface, targets)
 	if err != nil {
-		return model.FastLinkRouteStatus{
-			Message:        "应用 FastLink 节点路由失败: " + err.Error(),
+		return model.UpstreamProxyRouteStatus{
+			Message:        "应用代理节点路由失败: " + err.Error(),
 			InterfaceAlias: iface,
 			Targets:        targets,
 			RouteCount:     len(targets),
 		}, err
 	}
 
-	return model.FastLinkRouteStatus{
+	return model.UpstreamProxyRouteStatus{
 		Applied:        true,
-		Message:        fmt.Sprintf("已将 %d 个 FastLink 节点 IPv4 固定到 %s 出站", len(targets), iface),
+		Message:        fmt.Sprintf("已将 %d 个代理节点 IPv4 固定到 %s 出站", len(targets), iface),
 		InterfaceAlias: iface,
 		Gateway:        gateway,
 		RouteCount:     len(targets),
@@ -76,8 +76,8 @@ func ReconcileFastLinkRoutes(options FastLinkRouteOptions) (model.FastLinkRouteS
 	}, nil
 }
 
-func ClearFastLinkRoutes(targets []string, gateway string) error {
-	return removeFastLinkRoutes(NormalizeIPv4Targets(targets), gateway)
+func ClearUpstreamProxyRoutes(targets []string, gateway string) error {
+	return removeUpstreamProxyRoutes(NormalizeIPv4Targets(targets), gateway)
 }
 
 func NormalizeIPv4Targets(values []string) []string {

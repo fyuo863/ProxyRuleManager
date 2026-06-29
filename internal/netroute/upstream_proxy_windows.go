@@ -18,8 +18,8 @@ type applyRouteResult struct {
 	Count   int      `json:"count"`
 }
 
-func discoverFastLinkRemoteIPs(upstream string, programPaths []string) ([]string, error) {
-	output, err := runPowerShell(discoverFastLinkRemoteIPsScript(upstream, programPaths))
+func discoverUpstreamProxyRemoteIPs(upstream string, programPaths []string) ([]string, error) {
+	output, err := runPowerShell(discoverUpstreamProxyRemoteIPsScript(upstream, programPaths))
 	if err != nil {
 		return nil, err
 	}
@@ -30,42 +30,42 @@ func discoverFastLinkRemoteIPs(upstream string, programPaths []string) ([]string
 	var items []string
 	if strings.HasPrefix(raw, "[") {
 		if err := json.Unmarshal([]byte(raw), &items); err != nil {
-			return nil, fmt.Errorf("解析 FastLink 节点连接失败: %w", err)
+			return nil, fmt.Errorf("解析上游代理节点连接失败: %w", err)
 		}
 	} else {
 		var single string
 		if err := json.Unmarshal([]byte(raw), &single); err != nil {
-			return nil, fmt.Errorf("解析 FastLink 节点连接失败: %w", err)
+			return nil, fmt.Errorf("解析上游代理节点连接失败: %w", err)
 		}
 		items = []string{single}
 	}
 	return NormalizeIPv4Targets(items), nil
 }
 
-func applyFastLinkRoutes(interfaceAlias string, targets []string) (string, error) {
+func applyUpstreamProxyRoutes(interfaceAlias string, targets []string) (string, error) {
 	if len(targets) == 0 {
 		return "", nil
 	}
-	output, err := runPowerShell(applyFastLinkRoutesScript(interfaceAlias, targets))
+	output, err := runPowerShell(applyUpstreamProxyRoutesScript(interfaceAlias, targets))
 	if err != nil {
 		return "", err
 	}
 	var result applyRouteResult
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &result); err != nil {
-		return "", fmt.Errorf("解析 FastLink 节点路由结果失败: %w", err)
+		return "", fmt.Errorf("解析上游代理节点路由结果失败: %w", err)
 	}
 	return strings.TrimSpace(result.Gateway), nil
 }
 
-func removeFastLinkRoutes(targets []string, gateway string) error {
+func removeUpstreamProxyRoutes(targets []string, gateway string) error {
 	if len(targets) == 0 {
 		return nil
 	}
-	_, err := runPowerShell(removeFastLinkRoutesScript(targets, gateway))
+	_, err := runPowerShell(removeUpstreamProxyRoutesScript(targets, gateway))
 	return err
 }
 
-func discoverFastLinkRemoteIPsScript(upstream string, programPaths []string) string {
+func discoverUpstreamProxyRemoteIPsScript(upstream string, programPaths []string) string {
 	var b strings.Builder
 	b.WriteString("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n")
 	b.WriteString("$OutputEncoding = [Console]::OutputEncoding\n")
@@ -77,10 +77,6 @@ func discoverFastLinkRemoteIPsScript(upstream string, programPaths []string) str
 	b.WriteString("function Add-CandidatePath([string]$path) {\n")
 	b.WriteString("  if ([string]::IsNullOrWhiteSpace($path)) { return }\n")
 	b.WriteString("  $script:paths.Add($path)\n")
-	b.WriteString("  $name = [System.IO.Path]::GetFileName($path)\n")
-	b.WriteString("  $dir = [System.IO.Path]::GetDirectoryName($path)\n")
-	b.WriteString("  if ($dir -and $name -ieq 'FastLinkCore.exe') { $script:paths.Add((Join-Path $dir 'FastLink.exe')) }\n")
-	b.WriteString("  if ($dir -and $name -ieq 'FastLink.exe') { $script:paths.Add((Join-Path $dir 'FastLinkCore.exe')) }\n")
 	b.WriteString("}\n")
 	b.WriteString("$configured = @(")
 	for i, path := range programPaths {
@@ -111,9 +107,6 @@ func discoverFastLinkRemoteIPsScript(upstream string, programPaths []string) str
 	b.WriteString("if ($resolved.Count -gt 0) {\n")
 	b.WriteString("  $processes += @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and ($resolved -contains $_.ExecutablePath) })\n")
 	b.WriteString("}\n")
-	b.WriteString("if ($processes.Count -eq 0) {\n")
-	b.WriteString("  $processes += @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('FastLink.exe','FastLinkCore.exe') })\n")
-	b.WriteString("}\n")
 	b.WriteString("$pids = @($processes | Select-Object -ExpandProperty ProcessId -Unique)\n")
 	b.WriteString("$items = @()\n")
 	b.WriteString("if ($pids.Count -gt 0) {\n")
@@ -126,7 +119,7 @@ func discoverFastLinkRemoteIPsScript(upstream string, programPaths []string) str
 	return b.String()
 }
 
-func applyFastLinkRoutesScript(interfaceAlias string, targets []string) string {
+func applyUpstreamProxyRoutesScript(interfaceAlias string, targets []string) string {
 	var b strings.Builder
 	b.WriteString("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n")
 	b.WriteString("$OutputEncoding = [Console]::OutputEncoding\n")
@@ -150,7 +143,7 @@ func applyFastLinkRoutesScript(interfaceAlias string, targets []string) string {
 	return b.String()
 }
 
-func removeFastLinkRoutesScript(targets []string, gateway string) string {
+func removeUpstreamProxyRoutesScript(targets []string, gateway string) string {
 	var b strings.Builder
 	b.WriteString("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n")
 	b.WriteString("$OutputEncoding = [Console]::OutputEncoding\n")

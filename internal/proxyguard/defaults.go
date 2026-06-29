@@ -3,7 +3,6 @@ package proxyguard
 import (
 	"fmt"
 	"net"
-	"path/filepath"
 	"strings"
 
 	"proxy-rule-manager/internal/model"
@@ -11,7 +10,7 @@ import (
 
 // PrepareConfig fills in scheme-1 friendly defaults so a loopback upstream
 // can be paired with proxyguard without requiring the user to hand-enter
-// FastLink executable paths every time.
+// upstream proxy executable paths every time.
 func PrepareConfig(cfg model.AppConfig) (model.AppConfig, error) {
 	if !cfg.ProxyGuardEnabled {
 		return cfg, nil
@@ -26,7 +25,7 @@ func PrepareConfig(cfg model.AppConfig) (model.AppConfig, error) {
 		return cfg, nil
 	}
 
-	paths, err := suggestProgramPaths(cfg.FastLinkProxyAddr)
+	paths, err := suggestProgramPaths(cfg.UpstreamProxyAddr)
 	if err != nil {
 		return cfg, err
 	}
@@ -61,24 +60,9 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func withSiblingProxyPrograms(paths []string) []string {
-	out := append([]string(nil), paths...)
-	for _, path := range paths {
-		dir := filepath.Dir(path)
-		base := strings.ToLower(filepath.Base(path))
-		switch base {
-		case "fastlinkcore.exe":
-			out = append(out, filepath.Join(dir, "FastLink.exe"))
-		case "fastlink.exe":
-			out = append(out, filepath.Join(dir, "FastLinkCore.exe"))
-		}
-	}
-	return normalizePaths(out)
-}
-
 func missingProgramPathsMessage(upstream string) error {
 	if _, port, ok := loopbackUpstream(upstream); ok {
-		return fmt.Errorf("未找到本地上游代理进程: %s。已尝试按监听端口 %d 自动识别，请先启动 FastLink，或手动填写受控代理进程路径", upstream, port)
+		return fmt.Errorf("未找到本地上游代理进程: %s。已尝试按监听端口 %d 自动识别，请先启动代理客户端，或手动填写受控代理进程路径", upstream, port)
 	}
 	return fmt.Errorf("请至少填写一个受控代理进程路径")
 }

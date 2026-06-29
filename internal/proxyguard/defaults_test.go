@@ -9,7 +9,7 @@ import (
 
 func TestPrepareConfigUsesProxyInterfaceAsDefaultGuardInterface(t *testing.T) {
 	cfg := model.AppConfig{
-		FastLinkProxyAddr:   "127.0.0.1:7892",
+		UpstreamProxyAddr:   "127.0.0.1:7892",
 		ProxyGuardEnabled:   true,
 		ProxyInterfaceName:  "Wi-Fi",
 		ProxyGuardInterface: "",

@@ -21,15 +21,15 @@ func (a *App) GetAgentDiagnostics() (model.AgentDiagnostics, error) {
 		proxyGuardStatus = a.proxyGuard.Status()
 	}
 	tunStatus := a.tunService.Status(model.TunOptions{
-		InterfaceName:   cfg.TunInterfaceName,
-		AddressCIDR:     cfg.TunAddressCIDR,
-		MTU:             cfg.TunMTU,
-		IncludedApps:    cfg.TunIncludedApps,
-		FastLinkAddr:    cfg.FastLinkProxyAddr,
-		FastLinkType:    cfg.FastLinkProxyType,
-		ProxyInterface:  cfg.ProxyInterfaceName,
-		DirectInterface: cfg.DirectInterfaceName,
-		Rules:           cfg.Rules,
+		InterfaceName:     cfg.TunInterfaceName,
+		AddressCIDR:       cfg.TunAddressCIDR,
+		MTU:               cfg.TunMTU,
+		IncludedApps:      cfg.TunIncludedApps,
+		UpstreamProxyAddr: cfg.UpstreamProxyAddr,
+		UpstreamProxyType: cfg.UpstreamProxyType,
+		ProxyInterface:    cfg.ProxyInterfaceName,
+		DirectInterface:   cfg.DirectInterfaceName,
+		Rules:             cfg.Rules,
 	})
 
 	paths := diagnosticPaths()
@@ -52,7 +52,7 @@ func (a *App) GetAgentDiagnostics() (model.AgentDiagnostics, error) {
 		Paths:               paths,
 		State:               state,
 		ProxyGuard:          proxyGuardStatus,
-		FastLinkRoute:       a.fastLinkRouteStatus,
+		UpstreamProxyRoute:  a.upstreamProxyRouteStatus,
 		TunStatus:           tunStatus,
 		NetworkAdapters:     state.AvailableNetworkAdapters,
 		DefaultIPv4Routes:   routes,

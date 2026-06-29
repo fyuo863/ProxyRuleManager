@@ -25,26 +25,26 @@ type AddLogFunc func(entry model.TrafficLog)
 type UpdateLogFunc func(id string, mutator func(*model.TrafficLog))
 
 type Server struct {
-	addr         string
-	fastLinkAddr string
-	directIface  string
-	match        MatchFunc
-	addLog       AddLogFunc
-	updateLog    UpdateLogFunc
+	addr              string
+	upstreamProxyAddr string
+	directIface       string
+	match             MatchFunc
+	addLog            AddLogFunc
+	updateLog         UpdateLogFunc
 
 	server   *http.Server
 	listener net.Listener
 	mu       sync.RWMutex
 }
 
-func NewServer(addr, fastLinkAddr, directIface string, match MatchFunc, addLog AddLogFunc, updateLog UpdateLogFunc) *Server {
+func NewServer(addr, upstreamProxyAddr, directIface string, match MatchFunc, addLog AddLogFunc, updateLog UpdateLogFunc) *Server {
 	return &Server{
-		addr:         addr,
-		fastLinkAddr: fastLinkAddr,
-		directIface:  directIface,
-		match:        match,
-		addLog:       addLog,
-		updateLog:    updateLog,
+		addr:              addr,
+		upstreamProxyAddr: upstreamProxyAddr,
+		directIface:       directIface,
+		match:             match,
+		addLog:            addLog,
+		updateLog:         updateLog,
 	}
 }
 
@@ -76,18 +76,18 @@ func (s *Server) Stop(ctx context.Context) error {
 	return err
 }
 
-func (s *Server) UpdateSettings(addr, fastLinkAddr, directIface string) {
+func (s *Server) UpdateSettings(addr, upstreamProxyAddr, directIface string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.addr = addr
-	s.fastLinkAddr = fastLinkAddr
+	s.upstreamProxyAddr = upstreamProxyAddr
 	s.directIface = directIface
 }
 
-func (s *Server) currentFastLinkAddr() string {
+func (s *Server) currentUpstreamProxyAddr() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.fastLinkAddr
+	return s.upstreamProxyAddr
 }
 
 func (s *Server) currentDirectInterface() string {
@@ -118,7 +118,7 @@ func (s *Server) handleForwardHTTP(w http.ResponseWriter, r *http.Request) {
 		MatchedRuleValue: matched.Value,
 		MatchedRuleIndex: matched.Index,
 		Target:           rule.Target,
-		Path:             describePath(rule.Target, s.currentFastLinkAddr()),
+		Path:             describePath(rule.Target, s.currentUpstreamProxyAddr()),
 		Status:           model.TrafficStatusActive,
 	}
 	s.addLog(logEntry)
@@ -182,7 +182,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		MatchedRuleValue: matched.Value,
 		MatchedRuleIndex: matched.Index,
 		Target:           rule.Target,
-		Path:             describePath(rule.Target, s.currentFastLinkAddr()),
+		Path:             describePath(rule.Target, s.currentUpstreamProxyAddr()),
 		Status:           model.TrafficStatusActive,
 	}
 	s.addLog(logEntry)
@@ -251,9 +251,9 @@ func (s *Server) connectTunnel(ctx context.Context, target model.RuleTarget, hos
 		return dialer.DialContext(ctx, "tcp", hostPort)
 	}
 
-	fastLinkAddr := s.currentFastLinkAddr()
+	upstreamProxyAddr := s.currentUpstreamProxyAddr()
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	conn, err := dialer.DialContext(ctx, "tcp", fastLinkAddr)
+	conn, err := dialer.DialContext(ctx, "tcp", upstreamProxyAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +295,7 @@ func (s *Server) buildTransport(target model.RuleTarget) http.RoundTripper {
 		TLSHandshakeTimeout:   10 * time.Second,
 	}
 	if target == model.RuleTargetProxy {
-		proxyURL := &url.URL{Scheme: "http", Host: s.currentFastLinkAddr()}
+		proxyURL := &url.URL{Scheme: "http", Host: s.currentUpstreamProxyAddr()}
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
 	return transport
@@ -357,10 +357,10 @@ func splitHostPort(hostPort string) (string, string) {
 	return hostPort, "80"
 }
 
-func describePath(target model.RuleTarget, fastLinkAddr string) string {
+func describePath(target model.RuleTarget, upstreamProxyAddr string) string {
 	switch target {
 	case model.RuleTargetProxy:
-		return fmt.Sprintf("本程序 -> 上游代理 %s -> 实际出口由代理程序或系统路由决定", fastLinkAddr)
+		return fmt.Sprintf("本程序 -> 上游代理 %s -> 实际出口由代理程序或系统路由决定", upstreamProxyAddr)
 	case model.RuleTargetReject:
 		return "本程序拒绝连接"
 	default:

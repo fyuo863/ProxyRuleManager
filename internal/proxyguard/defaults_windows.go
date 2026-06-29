@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -61,23 +60,6 @@ $items | ConvertTo-Json -Compress
 			continue
 		}
 		paths = append(paths, trimmed)
-	}
-	paths = withSiblingProxyPrograms(paths)
-
-	// Filter non-existent sibling guesses while preserving discovered paths.
-	filtered := make([]string, 0, len(paths))
-	for _, item := range paths {
-		if _, err := os.Stat(item); err == nil {
-			filtered = append(filtered, item)
-			continue
-		}
-		// Keep the exact discovered listener path even if it briefly disappears.
-		if strings.EqualFold(filepath.Base(item), "fastlinkcore.exe") || strings.EqualFold(filepath.Base(item), "fastlink.exe") {
-			continue
-		}
-	}
-	if len(filtered) > 0 {
-		return normalizePaths(filtered), nil
 	}
 	return normalizePaths(paths), nil
 }

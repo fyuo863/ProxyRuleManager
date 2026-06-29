@@ -97,30 +97,30 @@ type WindowsProxyConfig struct {
 }
 
 type AppConfig struct {
-	Rules                  []Rule              `json:"rules"`
-	PacListenAddr          string              `json:"pacListenAddr"`
-	ProxyListenAddr        string              `json:"proxyListenAddr"`
-	FastLinkProxyAddr      string              `json:"fastLinkProxyAddr"`
-	FastLinkProxyType      string              `json:"fastLinkProxyType"`
-	ProxyInterfaceName     string              `json:"proxyInterfaceName"`
-	FastLinkRouteEnabled   bool                `json:"fastLinkRouteEnabled"`
-	FastLinkRouteInterface string              `json:"fastLinkRouteInterface"`
-	FastLinkRouteTargets   []string            `json:"fastLinkRouteTargets"`
-	ProxyGuardEnabled      bool                `json:"proxyGuardEnabled"`
-	ProxyGuardInterface    string              `json:"proxyGuardInterface"`
-	ProxyGuardProgramPaths []string            `json:"proxyGuardProgramPaths"`
-	DirectInterfaceName    string              `json:"directInterfaceName"`
-	TunInterfaceName       string              `json:"tunInterfaceName"`
-	TunAddressCIDR         string              `json:"tunAddressCidr"`
-	TunMTU                 int                 `json:"tunMtu"`
-	TunIncludedApps        []string            `json:"tunIncludedApps"`
-	AutoStartTunService    bool                `json:"autoStartTunService"`
-	AutoStartPacService    bool                `json:"autoStartPacService"`
-	AutoStartProxyService  bool                `json:"autoStartProxyService"`
-	AutoEnableSystemPac    bool                `json:"autoEnableSystemPac"`
-	DisableSystemPacOnExit bool                `json:"disableSystemPacOnExit"`
-	MaxLogEntries          int                 `json:"maxLogEntries"`
-	SavedWindowsProxy      *WindowsProxyConfig `json:"savedWindowsProxyConfig"`
+	Rules                       []Rule              `json:"rules"`
+	PacListenAddr               string              `json:"pacListenAddr"`
+	ProxyListenAddr             string              `json:"proxyListenAddr"`
+	UpstreamProxyAddr           string              `json:"upstreamProxyAddr"`
+	UpstreamProxyType           string              `json:"upstreamProxyType"`
+	ProxyInterfaceName          string              `json:"proxyInterfaceName"`
+	UpstreamProxyRouteEnabled   bool                `json:"upstreamProxyRouteEnabled"`
+	UpstreamProxyRouteInterface string              `json:"upstreamProxyRouteInterface"`
+	UpstreamProxyRouteTargets   []string            `json:"upstreamProxyRouteTargets"`
+	ProxyGuardEnabled           bool                `json:"proxyGuardEnabled"`
+	ProxyGuardInterface         string              `json:"proxyGuardInterface"`
+	ProxyGuardProgramPaths      []string            `json:"proxyGuardProgramPaths"`
+	DirectInterfaceName         string              `json:"directInterfaceName"`
+	TunInterfaceName            string              `json:"tunInterfaceName"`
+	TunAddressCIDR              string              `json:"tunAddressCidr"`
+	TunMTU                      int                 `json:"tunMtu"`
+	TunIncludedApps             []string            `json:"tunIncludedApps"`
+	AutoStartTunService         bool                `json:"autoStartTunService"`
+	AutoStartPacService         bool                `json:"autoStartPacService"`
+	AutoStartProxyService       bool                `json:"autoStartProxyService"`
+	AutoEnableSystemPac         bool                `json:"autoEnableSystemPac"`
+	DisableSystemPacOnExit      bool                `json:"disableSystemPacOnExit"`
+	MaxLogEntries               int                 `json:"maxLogEntries"`
+	SavedWindowsProxy           *WindowsProxyConfig `json:"savedWindowsProxyConfig"`
 }
 
 type ManagedAppStatus struct {
@@ -133,34 +133,34 @@ type ManagedAppStatus struct {
 }
 
 type ServiceStatus struct {
-	PacRunning             bool   `json:"pacRunning"`
-	PacURL                 string `json:"pacUrl"`
-	ProxyRunning           bool   `json:"proxyRunning"`
-	ProxyAddr              string `json:"proxyAddr"`
-	FastLinkRouteApplied   bool   `json:"fastLinkRouteApplied"`
-	FastLinkRouteMessage   string `json:"fastLinkRouteMessage"`
-	FastLinkRouteCount     int    `json:"fastLinkRouteCount"`
-	ProxyGuardApplied      bool   `json:"proxyGuardApplied"`
-	ProxyGuardMessage      string `json:"proxyGuardMessage"`
-	ProxyGuardProgramCount int    `json:"proxyGuardProgramCount"`
-	TunRunning             bool   `json:"tunRunning"`
-	TunAvailable           bool   `json:"tunAvailable"`
-	TunMessage             string `json:"tunMessage"`
-	TunIncludedAppCount    int    `json:"tunIncludedAppCount"`
-	ManagedAppCount        int    `json:"managedAppCount"`
-	ManagedProcessCount    int    `json:"managedProcessCount"`
-	ManagedConnectionCount int    `json:"managedConnectionCount"`
-	TunPacketCount         uint64 `json:"tunPacketCount"`
-	TunByteCount           uint64 `json:"tunByteCount"`
-	SystemPacEnabled       bool   `json:"systemPacEnabled"`
-	CurrentAutoConfigURL   string `json:"currentAutoConfigURL"`
-	FastLinkReachable      bool   `json:"fastLinkReachable"`
-	FastLinkMessage        string `json:"fastLinkMessage"`
-	RuleCount              int    `json:"ruleCount"`
-	EnabledRuleCount       int    `json:"enabledRuleCount"`
-	ActiveConnectionCount  int    `json:"activeConnectionCount"`
-	RecentLogCount         int    `json:"recentLogCount"`
-	LastError              string `json:"lastError"`
+	PacRunning                bool   `json:"pacRunning"`
+	PacURL                    string `json:"pacUrl"`
+	ProxyRunning              bool   `json:"proxyRunning"`
+	ProxyAddr                 string `json:"proxyAddr"`
+	UpstreamProxyRouteApplied bool   `json:"upstreamProxyRouteApplied"`
+	UpstreamProxyRouteMessage string `json:"upstreamProxyRouteMessage"`
+	UpstreamProxyRouteCount   int    `json:"upstreamProxyRouteCount"`
+	ProxyGuardApplied         bool   `json:"proxyGuardApplied"`
+	ProxyGuardMessage         string `json:"proxyGuardMessage"`
+	ProxyGuardProgramCount    int    `json:"proxyGuardProgramCount"`
+	TunRunning                bool   `json:"tunRunning"`
+	TunAvailable              bool   `json:"tunAvailable"`
+	TunMessage                string `json:"tunMessage"`
+	TunIncludedAppCount       int    `json:"tunIncludedAppCount"`
+	ManagedAppCount           int    `json:"managedAppCount"`
+	ManagedProcessCount       int    `json:"managedProcessCount"`
+	ManagedConnectionCount    int    `json:"managedConnectionCount"`
+	TunPacketCount            uint64 `json:"tunPacketCount"`
+	TunByteCount              uint64 `json:"tunByteCount"`
+	SystemPacEnabled          bool   `json:"systemPacEnabled"`
+	CurrentAutoConfigURL      string `json:"currentAutoConfigURL"`
+	UpstreamProxyReachable    bool   `json:"upstreamProxyReachable"`
+	UpstreamProxyMessage      string `json:"upstreamProxyMessage"`
+	RuleCount                 int    `json:"ruleCount"`
+	EnabledRuleCount          int    `json:"enabledRuleCount"`
+	ActiveConnectionCount     int    `json:"activeConnectionCount"`
+	RecentLogCount            int    `json:"recentLogCount"`
+	LastError                 string `json:"lastError"`
 }
 
 type ProxyGuardRuntimeStatus struct {
@@ -170,7 +170,7 @@ type ProxyGuardRuntimeStatus struct {
 	BlockedInterfaceCount int    `json:"blockedInterfaceCount"`
 }
 
-type FastLinkRouteStatus struct {
+type UpstreamProxyRouteStatus struct {
 	Applied        bool     `json:"applied"`
 	Message        string   `json:"message"`
 	InterfaceAlias string   `json:"interfaceAlias"`
@@ -208,19 +208,19 @@ type DiagnosticPaths struct {
 }
 
 type AgentDiagnostics struct {
-	GeneratedAt         string                  `json:"generatedAt"`
-	Paths               DiagnosticPaths         `json:"paths"`
-	State               AppState                `json:"state"`
-	ProxyGuard          ProxyGuardRuntimeStatus `json:"proxyGuard"`
-	FastLinkRoute       FastLinkRouteStatus     `json:"fastLinkRoute"`
-	TunStatus           TunRuntimeStatus        `json:"tunStatus"`
-	NetworkAdapters     []NetworkAdapterOption  `json:"networkAdapters"`
-	DefaultIPv4Routes   []NetworkRoute          `json:"defaultIpv4Routes"`
-	CurrentWindowsProxy *WindowsProxyConfig     `json:"currentWindowsProxy,omitempty"`
-	TunConfigPreview    string                  `json:"tunConfigPreview"`
-	TunLogTail          string                  `json:"tunLogTail"`
-	RecentLogs          []TrafficLog            `json:"recentLogs"`
-	FullLogs            []TrafficLog            `json:"fullLogs"`
+	GeneratedAt         string                   `json:"generatedAt"`
+	Paths               DiagnosticPaths          `json:"paths"`
+	State               AppState                 `json:"state"`
+	ProxyGuard          ProxyGuardRuntimeStatus  `json:"proxyGuard"`
+	UpstreamProxyRoute  UpstreamProxyRouteStatus `json:"upstreamProxyRoute"`
+	TunStatus           TunRuntimeStatus         `json:"tunStatus"`
+	NetworkAdapters     []NetworkAdapterOption   `json:"networkAdapters"`
+	DefaultIPv4Routes   []NetworkRoute           `json:"defaultIpv4Routes"`
+	CurrentWindowsProxy *WindowsProxyConfig      `json:"currentWindowsProxy,omitempty"`
+	TunConfigPreview    string                   `json:"tunConfigPreview"`
+	TunLogTail          string                   `json:"tunLogTail"`
+	RecentLogs          []TrafficLog             `json:"recentLogs"`
+	FullLogs            []TrafficLog             `json:"fullLogs"`
 }
 
 type AppState struct {

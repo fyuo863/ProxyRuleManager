@@ -44,7 +44,7 @@ export namespace model {
 	        this.byteCount = source["byteCount"];
 	    }
 	}
-	export class FastLinkRouteStatus {
+	export class UpstreamProxyRouteStatus {
 	    applied: boolean;
 	    message: string;
 	    interfaceAlias: string;
@@ -53,7 +53,7 @@ export namespace model {
 	    targets: string[];
 	
 	    static createFrom(source: any = {}) {
-	        return new FastLinkRouteStatus(source);
+	        return new UpstreamProxyRouteStatus(source);
 	    }
 	
 	    constructor(source: any = {}) {
@@ -175,9 +175,9 @@ export namespace model {
 	    pacUrl: string;
 	    proxyRunning: boolean;
 	    proxyAddr: string;
-	    fastLinkRouteApplied: boolean;
-	    fastLinkRouteMessage: string;
-	    fastLinkRouteCount: number;
+	    upstreamProxyRouteApplied: boolean;
+	    upstreamProxyRouteMessage: string;
+	    upstreamProxyRouteCount: number;
 	    proxyGuardApplied: boolean;
 	    proxyGuardMessage: string;
 	    proxyGuardProgramCount: number;
@@ -192,8 +192,8 @@ export namespace model {
 	    tunByteCount: number;
 	    systemPacEnabled: boolean;
 	    currentAutoConfigURL: string;
-	    fastLinkReachable: boolean;
-	    fastLinkMessage: string;
+	    upstreamProxyReachable: boolean;
+	    upstreamProxyMessage: string;
 	    ruleCount: number;
 	    enabledRuleCount: number;
 	    activeConnectionCount: number;
@@ -210,9 +210,9 @@ export namespace model {
 	        this.pacUrl = source["pacUrl"];
 	        this.proxyRunning = source["proxyRunning"];
 	        this.proxyAddr = source["proxyAddr"];
-	        this.fastLinkRouteApplied = source["fastLinkRouteApplied"];
-	        this.fastLinkRouteMessage = source["fastLinkRouteMessage"];
-	        this.fastLinkRouteCount = source["fastLinkRouteCount"];
+	        this.upstreamProxyRouteApplied = source["upstreamProxyRouteApplied"];
+	        this.upstreamProxyRouteMessage = source["upstreamProxyRouteMessage"];
+	        this.upstreamProxyRouteCount = source["upstreamProxyRouteCount"];
 	        this.proxyGuardApplied = source["proxyGuardApplied"];
 	        this.proxyGuardMessage = source["proxyGuardMessage"];
 	        this.proxyGuardProgramCount = source["proxyGuardProgramCount"];
@@ -227,8 +227,8 @@ export namespace model {
 	        this.tunByteCount = source["tunByteCount"];
 	        this.systemPacEnabled = source["systemPacEnabled"];
 	        this.currentAutoConfigURL = source["currentAutoConfigURL"];
-	        this.fastLinkReachable = source["fastLinkReachable"];
-	        this.fastLinkMessage = source["fastLinkMessage"];
+	        this.upstreamProxyReachable = source["upstreamProxyReachable"];
+	        this.upstreamProxyMessage = source["upstreamProxyMessage"];
 	        this.ruleCount = source["ruleCount"];
 	        this.enabledRuleCount = source["enabledRuleCount"];
 	        this.activeConnectionCount = source["activeConnectionCount"];
@@ -280,12 +280,12 @@ export namespace model {
 	    rules: Rule[];
 	    pacListenAddr: string;
 	    proxyListenAddr: string;
-	    fastLinkProxyAddr: string;
-	    fastLinkProxyType: string;
+	    upstreamProxyAddr: string;
+	    upstreamProxyType: string;
 	    proxyInterfaceName: string;
-	    fastLinkRouteEnabled: boolean;
-	    fastLinkRouteInterface: string;
-	    fastLinkRouteTargets: string[];
+	    upstreamProxyRouteEnabled: boolean;
+	    upstreamProxyRouteInterface: string;
+	    upstreamProxyRouteTargets: string[];
 	    proxyGuardEnabled: boolean;
 	    proxyGuardInterface: string;
 	    proxyGuardProgramPaths: string[];
@@ -311,12 +311,12 @@ export namespace model {
 	        this.rules = this.convertValues(source["rules"], Rule);
 	        this.pacListenAddr = source["pacListenAddr"];
 	        this.proxyListenAddr = source["proxyListenAddr"];
-	        this.fastLinkProxyAddr = source["fastLinkProxyAddr"];
-	        this.fastLinkProxyType = source["fastLinkProxyType"];
+	        this.upstreamProxyAddr = source["upstreamProxyAddr"];
+	        this.upstreamProxyType = source["upstreamProxyType"];
 	        this.proxyInterfaceName = source["proxyInterfaceName"];
-	        this.fastLinkRouteEnabled = source["fastLinkRouteEnabled"];
-	        this.fastLinkRouteInterface = source["fastLinkRouteInterface"];
-	        this.fastLinkRouteTargets = source["fastLinkRouteTargets"];
+	        this.upstreamProxyRouteEnabled = source["upstreamProxyRouteEnabled"];
+	        this.upstreamProxyRouteInterface = source["upstreamProxyRouteInterface"];
+	        this.upstreamProxyRouteTargets = source["upstreamProxyRouteTargets"];
 	        this.proxyGuardEnabled = source["proxyGuardEnabled"];
 	        this.proxyGuardInterface = source["proxyGuardInterface"];
 	        this.proxyGuardProgramPaths = source["proxyGuardProgramPaths"];
@@ -423,7 +423,7 @@ export namespace model {
 	    paths: DiagnosticPaths;
 	    state: AppState;
 	    proxyGuard: ProxyGuardRuntimeStatus;
-	    fastLinkRoute: FastLinkRouteStatus;
+	    upstreamProxyRoute: UpstreamProxyRouteStatus;
 	    tunStatus: TunRuntimeStatus;
 	    networkAdapters: NetworkAdapterOption[];
 	    defaultIpv4Routes: NetworkRoute[];
@@ -443,7 +443,7 @@ export namespace model {
 	        this.paths = this.convertValues(source["paths"], DiagnosticPaths);
 	        this.state = this.convertValues(source["state"], AppState);
 	        this.proxyGuard = this.convertValues(source["proxyGuard"], ProxyGuardRuntimeStatus);
-	        this.fastLinkRoute = this.convertValues(source["fastLinkRoute"], FastLinkRouteStatus);
+	        this.upstreamProxyRoute = this.convertValues(source["upstreamProxyRoute"], UpstreamProxyRouteStatus);
 	        this.tunStatus = this.convertValues(source["tunStatus"], TunRuntimeStatus);
 	        this.networkAdapters = this.convertValues(source["networkAdapters"], NetworkAdapterOption);
 	        this.defaultIpv4Routes = this.convertValues(source["defaultIpv4Routes"], NetworkRoute);

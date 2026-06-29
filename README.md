@@ -99,6 +99,23 @@ wails build
 
 默认会生成 Windows 可执行文件 `build/bin/ProxyRuleManager.exe`。
 
+## GitHub Tag Release
+
+项目提供 GitHub Actions 自动发布流程：
+
+- push / pull request 到 `main` 时运行格式检查、`go vet` 和测试
+- push `v*` 标签时构建 Windows amd64 发布包
+- 自动创建 GitHub Release，并上传 `ProxyRuleManager-<tag>-windows-amd64.zip`
+
+发布新版本：
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+当前项目只发布 Windows 版本，不构建 Linux 包。
+
 ## 在其他设备部署
 
 如果你要把这个项目部署到另一台 Windows 设备，推荐按下面的顺序操作：
@@ -188,7 +205,7 @@ douyin.com -> DIRECT
 - `rules`
 - `pacListenAddr`
 - `proxyListenAddr`
-- `fastLinkProxyAddr`
+- `upstreamProxyAddr`
 - `autoStartPacService`
 - `autoStartProxyService`
 - `autoEnableSystemPac`

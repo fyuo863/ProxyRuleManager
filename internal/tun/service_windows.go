@@ -217,7 +217,7 @@ func (s *WindowsService) Start(options model.TunOptions) error {
 	s.lastMatchedProcess = ""
 	s.mu.Unlock()
 
-	s.logf("service started; upstream=%s type=%s targets=%v", options.FastLinkAddr, options.FastLinkType, s.queries)
+	s.logf("service started; upstream=%s type=%s targets=%v", options.UpstreamProxyAddr, options.UpstreamProxyType, s.queries)
 	s.persistRuntimeSnapshot()
 
 	s.wg.Add(3)
@@ -290,21 +290,21 @@ func (s *WindowsService) Status(options model.TunOptions) model.TunRuntimeStatus
 			Message:   "应用级透明接管需要以管理员身份运行程序",
 		}
 	}
-	if strings.TrimSpace(options.FastLinkAddr) == "" {
+	if strings.TrimSpace(options.UpstreamProxyAddr) == "" {
 		return model.TunRuntimeStatus{
 			Running:   s.isRunning(),
 			Available: false,
 			Message:   "上游代理地址为空",
 		}
 	}
-	if _, _, err := net.SplitHostPort(strings.TrimSpace(options.FastLinkAddr)); err != nil {
+	if _, _, err := net.SplitHostPort(strings.TrimSpace(options.UpstreamProxyAddr)); err != nil {
 		return model.TunRuntimeStatus{
 			Running:   s.isRunning(),
 			Available: false,
 			Message:   "上游代理地址格式无效，应为 host:port",
 		}
 	}
-	switch strings.ToLower(strings.TrimSpace(options.FastLinkType)) {
+	switch strings.ToLower(strings.TrimSpace(options.UpstreamProxyType)) {
 	case "", "http", "socks", "socks5":
 	default:
 		return model.TunRuntimeStatus{
@@ -651,8 +651,8 @@ func (s *WindowsService) serveReflectedConnection(rc *redirectConnection) {
 }
 
 func (s *WindowsService) dialUpstream(ctx context.Context, destination string) (net.Conn, error) {
-	upstreamAddr := strings.TrimSpace(s.options.FastLinkAddr)
-	upstreamType := strings.ToLower(strings.TrimSpace(s.options.FastLinkType))
+	upstreamAddr := strings.TrimSpace(s.options.UpstreamProxyAddr)
+	upstreamType := strings.ToLower(strings.TrimSpace(s.options.UpstreamProxyType))
 	if upstreamType == "" {
 		upstreamType = "http"
 	}
@@ -894,7 +894,7 @@ func baseName(path string) string {
 }
 
 func (s *WindowsService) shouldBypassTransparentConnect(remoteIP net.IP, remotePort uint16) bool {
-	host, port, err := net.SplitHostPort(strings.TrimSpace(s.options.FastLinkAddr))
+	host, port, err := net.SplitHostPort(strings.TrimSpace(s.options.UpstreamProxyAddr))
 	if err != nil {
 		return false
 	}

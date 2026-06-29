@@ -18,12 +18,12 @@ const emptyState: AppState = {
     rules: [],
     pacListenAddr: "127.0.0.1:18088",
     proxyListenAddr: "127.0.0.1:18089",
-    fastLinkProxyAddr: "127.0.0.1:7892",
-    fastLinkProxyType: "http",
+    upstreamProxyAddr: "127.0.0.1:7892",
+    upstreamProxyType: "http",
     proxyInterfaceName: "",
-    fastLinkRouteEnabled: false,
-    fastLinkRouteInterface: "",
-    fastLinkRouteTargets: [],
+    upstreamProxyRouteEnabled: false,
+    upstreamProxyRouteInterface: "",
+    upstreamProxyRouteTargets: [],
     proxyGuardEnabled: false,
     proxyGuardInterface: "",
     proxyGuardProgramPaths: [],
@@ -45,9 +45,9 @@ const emptyState: AppState = {
     pacUrl: "",
     proxyRunning: false,
     proxyAddr: "",
-    fastLinkRouteApplied: false,
-    fastLinkRouteMessage: "",
-    fastLinkRouteCount: 0,
+    upstreamProxyRouteApplied: false,
+    upstreamProxyRouteMessage: "",
+    upstreamProxyRouteCount: 0,
     proxyGuardApplied: false,
     proxyGuardMessage: "",
     proxyGuardProgramCount: 0,
@@ -62,8 +62,8 @@ const emptyState: AppState = {
     tunByteCount: 0,
     systemPacEnabled: false,
     currentAutoConfigURL: "",
-    fastLinkReachable: false,
-    fastLinkMessage: "",
+    upstreamProxyReachable: false,
+    upstreamProxyMessage: "",
     ruleCount: 0,
     enabledRuleCount: 0,
     activeConnectionCount: 0,
@@ -101,7 +101,7 @@ const normalizeConfig = (config?: Partial<AppConfig> | null): AppConfig => ({
   ...config,
   rules: Array.isArray(config?.rules) ? config.rules : emptyState.config.rules,
   proxyGuardProgramPaths: Array.isArray(config?.proxyGuardProgramPaths) ? config.proxyGuardProgramPaths : emptyState.config.proxyGuardProgramPaths,
-  fastLinkRouteTargets: Array.isArray(config?.fastLinkRouteTargets) ? config.fastLinkRouteTargets : emptyState.config.fastLinkRouteTargets,
+  upstreamProxyRouteTargets: Array.isArray(config?.upstreamProxyRouteTargets) ? config.upstreamProxyRouteTargets : emptyState.config.upstreamProxyRouteTargets,
   tunIncludedApps: Array.isArray(config?.tunIncludedApps) ? config.tunIncludedApps : emptyState.config.tunIncludedApps,
   savedWindowsProxyConfig: config?.savedWindowsProxyConfig ?? null,
 });
@@ -198,11 +198,11 @@ function App() {
   const adapterOptions = useMemo(
     () => buildAdapterOptions(state.availableNetworkAdapters, [
       settingsDraft.proxyInterfaceName,
-      settingsDraft.fastLinkRouteInterface,
+      settingsDraft.upstreamProxyRouteInterface,
       settingsDraft.proxyGuardInterface,
       settingsDraft.directInterfaceName,
     ]),
-    [settingsDraft.directInterfaceName, settingsDraft.fastLinkRouteInterface, settingsDraft.proxyGuardInterface, settingsDraft.proxyInterfaceName, state.availableNetworkAdapters],
+    [settingsDraft.directInterfaceName, settingsDraft.upstreamProxyRouteInterface, settingsDraft.proxyGuardInterface, settingsDraft.proxyInterfaceName, state.availableNetworkAdapters],
   );
 
   const applyNextState = (next: AppState, syncSettings = false) => {
@@ -419,12 +419,12 @@ function App() {
               </button>
               <button className={`nav-item ${activeSection === "settings" ? "active" : ""}`} onClick={() => setActiveSection("settings")}>
                   <span>系统设置</span>
-                <small>{state.status.fastLinkReachable ? "上游代理 OK" : "需检查"}</small>
+                <small>{state.status.upstreamProxyReachable ? "上游代理 OK" : "需检查"}</small>
               </button>
             </div>
 
             <div className="sidebar-pills">
-              <span className={`pill ${state.status.fastLinkReachable ? "ok" : "warn"}`}>{state.status.fastLinkMessage || "状态检测中"}</span>
+              <span className={`pill ${state.status.upstreamProxyReachable ? "ok" : "warn"}`}>{state.status.upstreamProxyMessage || "状态检测中"}</span>
               <span className={`pill ${state.status.systemPacEnabled ? "ok" : ""}`}>System PAC {state.status.systemPacEnabled ? "Enabled" : "Disabled"}</span>
             </div>
 
@@ -448,8 +448,8 @@ function App() {
                 <StatusCard title="PAC 服务" value={state.status.pacRunning ? "运行中" : "未运行"} meta={state.status.pacUrl} accent={state.status.pacRunning} />
                 <StatusCard title="本地分流代理" value={state.status.proxyRunning ? "运行中" : "未运行"} meta={state.status.proxyAddr} accent={state.status.proxyRunning} />
                 <StatusCard title="系统 PAC" value={state.status.systemPacEnabled ? "已启用" : "未启用"} meta={state.status.currentAutoConfigURL || "未设置"} accent={state.status.systemPacEnabled} />
-                <StatusCard title="上游代理" value={state.status.fastLinkReachable ? "可连接" : "不可连接"} meta={state.status.fastLinkMessage} accent={state.status.fastLinkReachable} />
-                <StatusCard title="FastLink 节点路由" value={state.status.fastLinkRouteApplied ? "已应用" : "未应用"} meta={state.status.fastLinkRouteMessage || "未配置"} accent={state.status.fastLinkRouteApplied} />
+                <StatusCard title="上游代理" value={state.status.upstreamProxyReachable ? "可连接" : "不可连接"} meta={state.status.upstreamProxyMessage} accent={state.status.upstreamProxyReachable} />
+                <StatusCard title="代理节点路由" value={state.status.upstreamProxyRouteApplied ? "已应用" : "未应用"} meta={state.status.upstreamProxyRouteMessage || "未配置"} accent={state.status.upstreamProxyRouteApplied} />
                 <StatusCard title="代理出口限制" value={state.config.proxyGuardEnabled ? (state.status.proxyGuardApplied ? "已应用" : "待处理") : "未启用"} meta={state.status.proxyGuardMessage || "未配置"} accent={state.status.proxyGuardApplied} />
               </div>
             </div>
@@ -494,7 +494,7 @@ function App() {
                 代理出口限制: {state.status.proxyGuardMessage || "未检测"}
               </div>
               <div className="hint">
-                FastLink 节点路由: {state.status.fastLinkRouteMessage || "未检测"}
+                代理节点路由: {state.status.upstreamProxyRouteMessage || "未检测"}
               </div>
               <div className="console-actions secondary-actions">
                 <button className="ghost" onClick={() => void runAction(() => invoke("PauseTrafficRouting"))}>暂停分流</button>
@@ -846,11 +846,11 @@ function App() {
                   </label>
                   <label>
                     上游代理地址
-                    <input value={settingsDraft.fastLinkProxyAddr} onChange={(e) => updateSettingsDraft({ fastLinkProxyAddr: e.target.value })} />
+                    <input value={settingsDraft.upstreamProxyAddr} onChange={(e) => updateSettingsDraft({ upstreamProxyAddr: e.target.value })} />
                   </label>
                   <label>
                     上游类型
-                    <select value={settingsDraft.fastLinkProxyType} onChange={(e) => updateSettingsDraft({ fastLinkProxyType: e.target.value })}>
+                    <select value={settingsDraft.upstreamProxyType} onChange={(e) => updateSettingsDraft({ upstreamProxyType: e.target.value })}>
                       <option value="http">HTTP CONNECT</option>
                       <option value="socks">SOCKS</option>
                     </select>
@@ -865,11 +865,11 @@ function App() {
                     </select>
                   </label>
                   <label>
-                    FastLink 节点路由网卡
-                    <select value={settingsDraft.fastLinkRouteInterface} onChange={(e) => updateSettingsDraft({ fastLinkRouteInterface: e.target.value })}>
+                    代理节点路由网卡
+                    <select value={settingsDraft.upstreamProxyRouteInterface} onChange={(e) => updateSettingsDraft({ upstreamProxyRouteInterface: e.target.value })}>
                       <option value="">跟随上游代理出口网卡</option>
                       {adapterOptions.map((adapter) => (
-                        <option key={`fastlink-route-${adapter.name}`} value={adapter.name}>{formatAdapterLabel(adapter)}</option>
+                        <option key={`upstream-route-${adapter.name}`} value={adapter.name}>{formatAdapterLabel(adapter)}</option>
                       ))}
                     </select>
                   </label>
@@ -899,33 +899,33 @@ function App() {
                     <input type="number" min={100} max={5000} value={settingsDraft.maxLogEntries} onChange={(e) => updateSettingsDraft({ maxLogEntries: Number(e.target.value) })} />
                   </label>
                   <label className="full">
-                    FastLink 节点 IP
+                    代理节点 IP
                     <textarea
                       rows={3}
-                      value={(settingsDraft.fastLinkRouteTargets ?? []).join("\n")}
-                      onChange={(e) => updateSettingsDraft({ fastLinkRouteTargets: e.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
+                      value={(settingsDraft.upstreamProxyRouteTargets ?? []).join("\n")}
+                      onChange={(e) => updateSettingsDraft({ upstreamProxyRouteTargets: e.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
                       placeholder={"203.0.113.10\n198.51.100.8/32"}
                     />
                   </label>
                   <label className="check full">
-                    <input type="checkbox" checked={settingsDraft.fastLinkRouteEnabled} onChange={(e) => updateSettingsDraft({ fastLinkRouteEnabled: e.target.checked })} />
-                    启用 FastLink 节点 /32 路由
+                    <input type="checkbox" checked={settingsDraft.upstreamProxyRouteEnabled} onChange={(e) => updateSettingsDraft({ upstreamProxyRouteEnabled: e.target.checked })} />
+                    启用代理节点 /32 路由
                   </label>
-                  <div className="hint full">启用后，程序会把手动填写的节点 IP，以及自动识别到的 FastLink / FastLinkCore 当前远端 IPv4，添加为 `/32` 路由并指向所选 Wi-Fi 网关；不会调整全局网卡 metric。</div>
+                  <div className="hint full">启用后，程序会把手动填写的节点 IP，以及自动识别到的上游代理进程当前远端 IPv4，添加为 `/32` 路由并指向所选网关；不会调整全局网卡 metric。</div>
                   <label className="full">
                     受控代理进程路径
                     <textarea
                       rows={4}
                       value={(settingsDraft.proxyGuardProgramPaths ?? []).join("\n")}
                       onChange={(e) => updateSettingsDraft({ proxyGuardProgramPaths: e.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
-                      placeholder={"D:\\Program Files\\FastLink\\FastLinkCore.exe\nD:\\Program Files\\FastLink\\FastLink.exe"}
+                      placeholder={"D:\\Program Files\\Clash\\clash.exe\nD:\\Program Files\\sing-box\\sing-box.exe"}
                     />
                   </label>
                   <label className="check full">
                     <input type="checkbox" checked={settingsDraft.proxyGuardEnabled} onChange={(e) => updateSettingsDraft({ proxyGuardEnabled: e.target.checked })} />
                     启用代理进程出口限制
                   </label>
-                  <div className="hint full">当上游代理地址是 `127.0.0.1` 或 `localhost` 时，要固定真正的外网出口，可以直接启用这里的限制。若“代理进程出口网卡”留空，会默认跟随“上游代理出口网卡”；若“受控代理进程路径”留空，程序会优先尝试按本地监听端口自动识别 FastLink 进程。</div>
+                  <div className="hint full">当上游代理地址是 `127.0.0.1` 或 `localhost` 时，要固定真正的外网出口，可以直接启用这里的限制。若“代理进程出口网卡”留空，会默认跟随“上游代理出口网卡”；若“受控代理进程路径”留空，程序会优先尝试按本地监听端口自动识别代理进程。</div>
                   <label className="full">
                     透明接管应用名单
                     <textarea

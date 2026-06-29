@@ -1,0 +1,176 @@
+name: Proxy Rule Manager CI
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint & Vet
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.2"
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend assets
+        run: |
+          npm ci --prefix frontend
+          npm run build --prefix frontend
+
+      - name: Check formatting
+        shell: pwsh
+        run: |
+          $files = gofmt -l .
+          if ($files) {
+            $files
+            exit 1
+          }
+
+      - name: Run go vet
+        run: go vet ./...
+
+  test:
+    name: Test
+    needs: lint
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.2"
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend assets
+        run: |
+          npm ci --prefix frontend
+          npm run build --prefix frontend
+
+      - name: Run tests
+        run: go test -race -v ./...
+
+  build-windows:
+    name: Build Windows Release Package
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    env:
+      RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.2"
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Wails CLI
+        shell: pwsh
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+          & "$(go env GOPATH)\bin\wails.exe" version
+
+      - name: Build Wails app
+        shell: pwsh
+        run: |
+          & "$(go env GOPATH)\bin\wails.exe" build
+
+      - name: Package release zip
+        shell: pwsh
+        run: |
+          $packageName = "ProxyRuleManager-$env:RELEASE_VERSION-windows-amd64"
+          $releaseRoot = Join-Path $PWD "release\$packageName"
+          $distRoot = Join-Path $PWD "dist"
+          New-Item -ItemType Directory -Force -Path $releaseRoot, $distRoot | Out-Null
+
+          Copy-Item -LiteralPath "build\bin\ProxyRuleManager.exe" -Destination $releaseRoot -Force
+          Copy-Item -LiteralPath "README.md" -Destination $releaseRoot -Force
+          if (Test-Path -LiteralPath "third_party") {
+            Copy-Item -LiteralPath "third_party" -Destination $releaseRoot -Recurse -Force
+          }
+
+          $zipPath = Join-Path $distRoot "$packageName.zip"
+          Compress-Archive -Path (Join-Path $releaseRoot "*") -DestinationPath $zipPath -Force
+          Get-ChildItem -LiteralPath $distRoot
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProxyRuleManager-windows-amd64
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Create Release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "release-artifacts/**/*.zip"
+          tag: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          generateReleaseNotes: true
+          body: |
+            自动发布 Proxy Rule Manager。
+
+            - 构建自 commit: `${{ github.sha }}`
+            - Windows 包内包含 `ProxyRuleManager.exe`、`README.md` 和仓库中的 `third_party/` 运行时目录。
+
+            如需使用应用透明接管或代理进程出口限制，请以管理员身份启动。
+          token: ${{ secrets.GITHUB_TOKEN }}

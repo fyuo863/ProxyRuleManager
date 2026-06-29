@@ -77,12 +77,20 @@ desktop.ini
 .history/
 .cache/
 
+# Local Codex / diagnostics
+.agents/
+.codegraph/
+.tmp/
+CODEX_DEBUG_NOTES.md
+scripts/
+
 # Ignore credentials and secrets (uncomment if used)
 # .env.local
 # secrets/
 
 # End of .gitignore
 frontend/node_modules/
+frontend/dist/
 frontend/dist/assets/
 build/
 wintun.dll

@@ -8,14 +8,14 @@ func listDefaultIPv4Routes() ([]model.NetworkRoute, error) {
 	return nil, nil
 }
 
-func discoverFastLinkRemoteIPs(upstream string, programPaths []string) ([]string, error) {
+func discoverUpstreamProxyRemoteIPs(upstream string, programPaths []string) ([]string, error) {
 	return nil, nil
 }
 
-func applyFastLinkRoutes(interfaceAlias string, targets []string) (string, error) {
+func applyUpstreamProxyRoutes(interfaceAlias string, targets []string) (string, error) {
 	return "", nil
 }
 
-func removeFastLinkRoutes(targets []string, gateway string) error {
+func removeUpstreamProxyRoutes(targets []string, gateway string) error {
 	return nil
 }

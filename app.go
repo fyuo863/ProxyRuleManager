@@ -32,23 +32,23 @@ import (
 )
 
 type App struct {
-	ctx                 context.Context
-	config              *config.Store
-	ruleEngine          *rules.Engine
-	logStore            *logs.Store
-	pacServer           *pac.Server
-	proxySrv            *proxy.Server
-	appMonitor          appmonitor.Service
-	proxyGuard          proxyguard.Service
-	tunService          tun.Service
-	adaptersSeen        []model.NetworkAdapterOption
-	adaptersAt          time.Time
-	fastLinkRouteStatus model.FastLinkRouteStatus
-	pacRunning          bool
-	proxyRunning        bool
-	tunRunning          bool
-	lastError           string
-	systemPacGuardStop  chan struct{}
+	ctx                      context.Context
+	config                   *config.Store
+	ruleEngine               *rules.Engine
+	logStore                 *logs.Store
+	pacServer                *pac.Server
+	proxySrv                 *proxy.Server
+	appMonitor               appmonitor.Service
+	proxyGuard               proxyguard.Service
+	tunService               tun.Service
+	adaptersSeen             []model.NetworkAdapterOption
+	adaptersAt               time.Time
+	upstreamProxyRouteStatus model.UpstreamProxyRouteStatus
+	pacRunning               bool
+	proxyRunning             bool
+	tunRunning               bool
+	lastError                string
+	systemPacGuardStop       chan struct{}
 }
 
 func NewApp() *App {
@@ -81,7 +81,7 @@ func (a *App) startup(ctx context.Context) {
 	if err := a.reconcileProxyGuard(store.Get()); err != nil {
 		a.lastError = err.Error()
 	}
-	if err := a.reconcileFastLinkRoutes(store.Get()); err != nil {
+	if err := a.reconcileUpstreamProxyRoutes(store.Get()); err != nil {
 		a.lastError = err.Error()
 	}
 
@@ -109,7 +109,7 @@ func (a *App) shutdown(ctx context.Context) {
 			_ = winproxy.Restore(*cfg.SavedWindowsProxy)
 		}
 	}
-	_ = a.clearFastLinkRoutes()
+	_ = a.clearUpstreamProxyRoutes()
 	a.stopServers()
 }
 
@@ -117,7 +117,7 @@ func (a *App) rebuildServices() {
 	cfg := a.config.Get()
 	a.logStore.SetMax(cfg.MaxLogEntries)
 	a.pacServer = pac.NewServer(cfg.PacListenAddr, cfg.ProxyListenAddr)
-	a.proxySrv = proxy.NewServer(cfg.ProxyListenAddr, cfg.FastLinkProxyAddr, cfg.DirectInterfaceName, a.matchRule, a.addLog, a.updateLog)
+	a.proxySrv = proxy.NewServer(cfg.ProxyListenAddr, cfg.UpstreamProxyAddr, cfg.DirectInterfaceName, a.matchRule, a.addLog, a.updateLog)
 }
 
 func (a *App) stopServers() {
@@ -230,7 +230,7 @@ func (a *App) getState(forceAdapters bool) model.AppState {
 		a.lastError = err.Error()
 	}
 
-	fastLinkReachable, fastLinkMessage := a.probeFastLink(cfg.FastLinkProxyAddr)
+	upstreamProxyReachable, upstreamProxyMessage := a.probeUpstreamProxy(cfg.UpstreamProxyAddr)
 	pacReady := a.pacRunning && a.probePacServer(cfg) == nil
 	proxyReady := a.proxyRunning && probeTCP(cfg.ProxyListenAddr) == nil
 
@@ -250,48 +250,48 @@ func (a *App) getState(forceAdapters bool) model.AppState {
 		proxyGuardStatus = a.proxyGuard.Status()
 	}
 	tunStatus := a.tunService.Status(model.TunOptions{
-		InterfaceName:   cfg.TunInterfaceName,
-		AddressCIDR:     cfg.TunAddressCIDR,
-		MTU:             cfg.TunMTU,
-		IncludedApps:    cfg.TunIncludedApps,
-		FastLinkAddr:    cfg.FastLinkProxyAddr,
-		FastLinkType:    cfg.FastLinkProxyType,
-		ProxyInterface:  cfg.ProxyInterfaceName,
-		DirectInterface: cfg.DirectInterfaceName,
-		Rules:           cfg.Rules,
+		InterfaceName:     cfg.TunInterfaceName,
+		AddressCIDR:       cfg.TunAddressCIDR,
+		MTU:               cfg.TunMTU,
+		IncludedApps:      cfg.TunIncludedApps,
+		UpstreamProxyAddr: cfg.UpstreamProxyAddr,
+		UpstreamProxyType: cfg.UpstreamProxyType,
+		ProxyInterface:    cfg.ProxyInterfaceName,
+		DirectInterface:   cfg.DirectInterfaceName,
+		Rules:             cfg.Rules,
 	})
 
 	return model.AppState{
 		Config: cfg,
 		Status: model.ServiceStatus{
-			PacRunning:             pacReady,
-			PacURL:                 "http://" + cfg.PacListenAddr + "/proxy.pac",
-			ProxyRunning:           proxyReady,
-			ProxyAddr:              cfg.ProxyListenAddr,
-			FastLinkRouteApplied:   a.fastLinkRouteStatus.Applied,
-			FastLinkRouteMessage:   a.fastLinkRouteStatus.Message,
-			FastLinkRouteCount:     a.fastLinkRouteStatus.RouteCount,
-			ProxyGuardApplied:      proxyGuardStatus.Applied,
-			ProxyGuardMessage:      proxyGuardStatus.Message,
-			ProxyGuardProgramCount: proxyGuardStatus.ProgramCount,
-			TunRunning:             a.tunRunning && tunStatus.Running,
-			TunAvailable:           tunStatus.Available,
-			TunMessage:             tunStatus.Message,
-			TunIncludedAppCount:    len(cfg.TunIncludedApps),
-			ManagedAppCount:        len(managedSnapshot.ManagedApps),
-			ManagedProcessCount:    managedSnapshot.ManagedProcessCount,
-			ManagedConnectionCount: managedSnapshot.ManagedConnectionCount,
-			TunPacketCount:         tunStatus.PacketCount,
-			TunByteCount:           tunStatus.ByteCount,
-			SystemPacEnabled:       currentProxyCfg.AutoConfigURL == "http://"+cfg.PacListenAddr+"/proxy.pac",
-			CurrentAutoConfigURL:   currentProxyCfg.AutoConfigURL,
-			FastLinkReachable:      fastLinkReachable,
-			FastLinkMessage:        fastLinkMessage,
-			RuleCount:              len(cfg.Rules),
-			EnabledRuleCount:       enabledRules,
-			ActiveConnectionCount:  a.logStore.ActiveCount(),
-			RecentLogCount:         a.logStore.Count(),
-			LastError:              a.lastError,
+			PacRunning:                pacReady,
+			PacURL:                    "http://" + cfg.PacListenAddr + "/proxy.pac",
+			ProxyRunning:              proxyReady,
+			ProxyAddr:                 cfg.ProxyListenAddr,
+			UpstreamProxyRouteApplied: a.upstreamProxyRouteStatus.Applied,
+			UpstreamProxyRouteMessage: a.upstreamProxyRouteStatus.Message,
+			UpstreamProxyRouteCount:   a.upstreamProxyRouteStatus.RouteCount,
+			ProxyGuardApplied:         proxyGuardStatus.Applied,
+			ProxyGuardMessage:         proxyGuardStatus.Message,
+			ProxyGuardProgramCount:    proxyGuardStatus.ProgramCount,
+			TunRunning:                a.tunRunning && tunStatus.Running,
+			TunAvailable:              tunStatus.Available,
+			TunMessage:                tunStatus.Message,
+			TunIncludedAppCount:       len(cfg.TunIncludedApps),
+			ManagedAppCount:           len(managedSnapshot.ManagedApps),
+			ManagedProcessCount:       managedSnapshot.ManagedProcessCount,
+			ManagedConnectionCount:    managedSnapshot.ManagedConnectionCount,
+			TunPacketCount:            tunStatus.PacketCount,
+			TunByteCount:              tunStatus.ByteCount,
+			SystemPacEnabled:          currentProxyCfg.AutoConfigURL == "http://"+cfg.PacListenAddr+"/proxy.pac",
+			CurrentAutoConfigURL:      currentProxyCfg.AutoConfigURL,
+			UpstreamProxyReachable:    upstreamProxyReachable,
+			UpstreamProxyMessage:      upstreamProxyMessage,
+			RuleCount:                 len(cfg.Rules),
+			EnabledRuleCount:          enabledRules,
+			ActiveConnectionCount:     a.logStore.ActiveCount(),
+			RecentLogCount:            a.logStore.Count(),
+			LastError:                 a.lastError,
 		},
 		Logs:                     a.logStore.List(),
 		ManagedApps:              managedSnapshot.ManagedApps,
@@ -299,7 +299,7 @@ func (a *App) getState(forceAdapters bool) model.AppState {
 	}
 }
 
-func (a *App) probeFastLink(addr string) (bool, string) {
+func (a *App) probeUpstreamProxy(addr string) (bool, string) {
 	trimmed := strings.TrimSpace(addr)
 	if trimmed == "" {
 		return false, "上游代理地址为空"
@@ -308,7 +308,7 @@ func (a *App) probeFastLink(addr string) (bool, string) {
 	if err != nil {
 		return false, "上游代理地址格式无效，应为 host:port"
 	}
-	if a.hasObservedFastLinkConnection(host, port) {
+	if a.hasObservedUpstreamProxyConnection(host, port) {
 		return true, "已检测到应用与上游代理的活动连接"
 	}
 
@@ -330,7 +330,7 @@ func (a *App) probeFastLink(addr string) (bool, string) {
 	return false, fmt.Sprintf("上游代理端口不可用: %v", lastErr)
 }
 
-func (a *App) hasObservedFastLinkConnection(host, port string) bool {
+func (a *App) hasObservedUpstreamProxyConnection(host, port string) bool {
 	if a.logStore == nil {
 		return false
 	}
@@ -448,7 +448,7 @@ func (a *App) StopProxyService() error {
 		return err
 	}
 	cfg := a.config.Get()
-	a.proxySrv = proxy.NewServer(cfg.ProxyListenAddr, cfg.FastLinkProxyAddr, cfg.DirectInterfaceName, a.matchRule, a.addLog, a.updateLog)
+	a.proxySrv = proxy.NewServer(cfg.ProxyListenAddr, cfg.UpstreamProxyAddr, cfg.DirectInterfaceName, a.matchRule, a.addLog, a.updateLog)
 	a.proxyRunning = false
 	a.emitState()
 	return nil
@@ -457,15 +457,15 @@ func (a *App) StopProxyService() error {
 func (a *App) StartTunService() error {
 	cfg := a.config.Get()
 	err := a.tunService.Start(model.TunOptions{
-		InterfaceName:   cfg.TunInterfaceName,
-		AddressCIDR:     cfg.TunAddressCIDR,
-		MTU:             cfg.TunMTU,
-		IncludedApps:    cfg.TunIncludedApps,
-		FastLinkAddr:    cfg.FastLinkProxyAddr,
-		FastLinkType:    cfg.FastLinkProxyType,
-		ProxyInterface:  cfg.ProxyInterfaceName,
-		DirectInterface: cfg.DirectInterfaceName,
-		Rules:           cfg.Rules,
+		InterfaceName:     cfg.TunInterfaceName,
+		AddressCIDR:       cfg.TunAddressCIDR,
+		MTU:               cfg.TunMTU,
+		IncludedApps:      cfg.TunIncludedApps,
+		UpstreamProxyAddr: cfg.UpstreamProxyAddr,
+		UpstreamProxyType: cfg.UpstreamProxyType,
+		ProxyInterface:    cfg.ProxyInterfaceName,
+		DirectInterface:   cfg.DirectInterfaceName,
+		Rules:             cfg.Rules,
 	})
 	if err != nil {
 		a.lastError = err.Error()
@@ -514,8 +514,8 @@ func (a *App) PauseTrafficRouting() (model.AppState, error) {
 
 	cfg := a.config.Get()
 	cfg.ProxyGuardEnabled = false
-	cfg.FastLinkRouteEnabled = false
-	if err := a.reconcileFastLinkRoutes(cfg); err != nil {
+	cfg.UpstreamProxyRouteEnabled = false
+	if err := a.reconcileUpstreamProxyRoutes(cfg); err != nil {
 		errs = append(errs, err)
 	}
 	if err := a.reconcileProxyGuard(cfg); err != nil {
@@ -572,8 +572,8 @@ func (a *App) ensurePacProxyChainReady(cfg model.AppConfig) error {
 	if err := probeTCP(cfg.ProxyListenAddr); err != nil {
 		return fmt.Errorf("本地分流代理未就绪: %w", err)
 	}
-	if ok, message := a.probeFastLink(cfg.FastLinkProxyAddr); !ok {
-		return fmt.Errorf("FastLink 上游不可用: %s", message)
+	if ok, message := a.probeUpstreamProxy(cfg.UpstreamProxyAddr); !ok {
+		return fmt.Errorf("上游代理 上游不可用: %s", message)
 	}
 	return nil
 }
@@ -594,7 +594,7 @@ func (a *App) resetProxyService(cfg model.AppConfig) {
 	if a.proxySrv != nil {
 		_ = a.proxySrv.Stop(ctx)
 	}
-	a.proxySrv = proxy.NewServer(cfg.ProxyListenAddr, cfg.FastLinkProxyAddr, cfg.DirectInterfaceName, a.matchRule, a.addLog, a.updateLog)
+	a.proxySrv = proxy.NewServer(cfg.ProxyListenAddr, cfg.UpstreamProxyAddr, cfg.DirectInterfaceName, a.matchRule, a.addLog, a.updateLog)
 	a.proxyRunning = false
 }
 
@@ -644,8 +644,8 @@ func (a *App) DisableSystemPac() error {
 
 func (a *App) RefreshStatus() model.AppState {
 	cfg := a.config.Get()
-	if cfg.FastLinkRouteEnabled {
-		if err := a.reconcileFastLinkRoutes(cfg); err != nil {
+	if cfg.UpstreamProxyRouteEnabled {
+		if err := a.reconcileUpstreamProxyRoutes(cfg); err != nil {
 			a.lastError = err.Error()
 		}
 	}
@@ -828,12 +828,12 @@ func (a *App) SaveSettings(next model.AppConfig) (model.AppState, error) {
 	err = a.config.Update(func(cfg *model.AppConfig) error {
 		cfg.PacListenAddr = next.PacListenAddr
 		cfg.ProxyListenAddr = next.ProxyListenAddr
-		cfg.FastLinkProxyAddr = next.FastLinkProxyAddr
-		cfg.FastLinkProxyType = next.FastLinkProxyType
+		cfg.UpstreamProxyAddr = next.UpstreamProxyAddr
+		cfg.UpstreamProxyType = next.UpstreamProxyType
 		cfg.ProxyInterfaceName = next.ProxyInterfaceName
-		cfg.FastLinkRouteEnabled = next.FastLinkRouteEnabled
-		cfg.FastLinkRouteInterface = next.FastLinkRouteInterface
-		cfg.FastLinkRouteTargets = next.FastLinkRouteTargets
+		cfg.UpstreamProxyRouteEnabled = next.UpstreamProxyRouteEnabled
+		cfg.UpstreamProxyRouteInterface = next.UpstreamProxyRouteInterface
+		cfg.UpstreamProxyRouteTargets = next.UpstreamProxyRouteTargets
 		cfg.ProxyGuardEnabled = next.ProxyGuardEnabled
 		cfg.ProxyGuardInterface = next.ProxyGuardInterface
 		cfg.ProxyGuardProgramPaths = next.ProxyGuardProgramPaths
@@ -904,7 +904,7 @@ func (a *App) SaveSettings(next model.AppConfig) (model.AppState, error) {
 		a.lastError = err.Error()
 		return a.GetState(), err
 	}
-	if err := a.reconcileFastLinkRoutes(a.config.Get()); err != nil {
+	if err := a.reconcileUpstreamProxyRoutes(a.config.Get()); err != nil {
 		a.lastError = err.Error()
 		return a.GetState(), err
 	}
@@ -991,28 +991,28 @@ func (a *App) reconcileProxyGuard(cfg model.AppConfig) error {
 	return a.proxyGuard.Reconcile(cfg)
 }
 
-func (a *App) reconcileFastLinkRoutes(cfg model.AppConfig) error {
-	status, err := netroute.ReconcileFastLinkRoutes(netroute.FastLinkRouteOptions{
-		Enabled:         cfg.FastLinkRouteEnabled,
-		InterfaceAlias:  cfg.FastLinkRouteInterface,
+func (a *App) reconcileUpstreamProxyRoutes(cfg model.AppConfig) error {
+	status, err := netroute.ReconcileUpstreamProxyRoutes(netroute.UpstreamProxyRouteOptions{
+		Enabled:         cfg.UpstreamProxyRouteEnabled,
+		InterfaceAlias:  cfg.UpstreamProxyRouteInterface,
 		FallbackAlias:   cfg.ProxyInterfaceName,
-		UpstreamAddr:    cfg.FastLinkProxyAddr,
+		UpstreamAddr:    cfg.UpstreamProxyAddr,
 		ProgramPaths:    cfg.ProxyGuardProgramPaths,
-		ManualTargets:   cfg.FastLinkRouteTargets,
-		PreviousTargets: a.fastLinkRouteStatus.Targets,
-		PreviousGateway: a.fastLinkRouteStatus.Gateway,
+		ManualTargets:   cfg.UpstreamProxyRouteTargets,
+		PreviousTargets: a.upstreamProxyRouteStatus.Targets,
+		PreviousGateway: a.upstreamProxyRouteStatus.Gateway,
 	})
-	a.fastLinkRouteStatus = status
+	a.upstreamProxyRouteStatus = status
 	return err
 }
 
-func (a *App) clearFastLinkRoutes() error {
-	if len(a.fastLinkRouteStatus.Targets) == 0 {
-		a.fastLinkRouteStatus = model.FastLinkRouteStatus{Message: "未启用 FastLink 节点路由"}
+func (a *App) clearUpstreamProxyRoutes() error {
+	if len(a.upstreamProxyRouteStatus.Targets) == 0 {
+		a.upstreamProxyRouteStatus = model.UpstreamProxyRouteStatus{Message: "未启用代理节点路由"}
 		return nil
 	}
-	err := netroute.ClearFastLinkRoutes(a.fastLinkRouteStatus.Targets, a.fastLinkRouteStatus.Gateway)
-	a.fastLinkRouteStatus = model.FastLinkRouteStatus{Message: "未启用 FastLink 节点路由"}
+	err := netroute.ClearUpstreamProxyRoutes(a.upstreamProxyRouteStatus.Targets, a.upstreamProxyRouteStatus.Gateway)
+	a.upstreamProxyRouteStatus = model.UpstreamProxyRouteStatus{Message: "未启用代理节点路由"}
 	return err
 }
 

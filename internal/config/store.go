@@ -49,30 +49,30 @@ func defaultRules() []model.Rule {
 
 func defaultConfig() model.AppConfig {
 	return model.AppConfig{
-		Rules:                  defaultRules(),
-		PacListenAddr:          "127.0.0.1:18088",
-		ProxyListenAddr:        "127.0.0.1:18089",
-		FastLinkProxyAddr:      "127.0.0.1:7892",
-		FastLinkProxyType:      "http",
-		ProxyInterfaceName:     "",
-		FastLinkRouteEnabled:   false,
-		FastLinkRouteInterface: "",
-		FastLinkRouteTargets:   []string{},
-		ProxyGuardEnabled:      false,
-		ProxyGuardInterface:    "",
-		ProxyGuardProgramPaths: []string{},
-		DirectInterfaceName:    "",
-		TunInterfaceName:       "ProxyRuleManagerTun",
-		TunAddressCIDR:         "172.19.0.1/30",
-		TunMTU:                 1500,
-		TunIncludedApps:        defaultTunIncludedAppsCopy(),
-		AutoStartTunService:    false,
-		AutoStartPacService:    false,
-		AutoStartProxyService:  false,
-		AutoEnableSystemPac:    false,
-		DisableSystemPacOnExit: false,
-		MaxLogEntries:          500,
-		SavedWindowsProxy:      nil,
+		Rules:                       defaultRules(),
+		PacListenAddr:               "127.0.0.1:18088",
+		ProxyListenAddr:             "127.0.0.1:18089",
+		UpstreamProxyAddr:           "127.0.0.1:7892",
+		UpstreamProxyType:           "http",
+		ProxyInterfaceName:          "",
+		UpstreamProxyRouteEnabled:   false,
+		UpstreamProxyRouteInterface: "",
+		UpstreamProxyRouteTargets:   []string{},
+		ProxyGuardEnabled:           false,
+		ProxyGuardInterface:         "",
+		ProxyGuardProgramPaths:      []string{},
+		DirectInterfaceName:         "",
+		TunInterfaceName:            "ProxyRuleManagerTun",
+		TunAddressCIDR:              "172.19.0.1/30",
+		TunMTU:                      1500,
+		TunIncludedApps:             defaultTunIncludedAppsCopy(),
+		AutoStartTunService:         false,
+		AutoStartPacService:         false,
+		AutoStartProxyService:       false,
+		AutoEnableSystemPac:         false,
+		DisableSystemPacOnExit:      false,
+		MaxLogEntries:               500,
+		SavedWindowsProxy:           nil,
 	}
 }
 
@@ -116,16 +116,16 @@ func (s *Store) ensureInvariants() {
 	if s.cfg.ProxyListenAddr == "" {
 		s.cfg.ProxyListenAddr = "127.0.0.1:18089"
 	}
-	if s.cfg.FastLinkProxyAddr == "" {
-		s.cfg.FastLinkProxyAddr = "127.0.0.1:7892"
+	if s.cfg.UpstreamProxyAddr == "" {
+		s.cfg.UpstreamProxyAddr = "127.0.0.1:7892"
 	}
-	if s.cfg.FastLinkProxyType == "" {
-		s.cfg.FastLinkProxyType = "http"
+	if s.cfg.UpstreamProxyType == "" {
+		s.cfg.UpstreamProxyType = "http"
 	}
 	if s.cfg.ProxyInterfaceName == "" {
 		s.cfg.ProxyInterfaceName = ""
 	}
-	s.cfg.FastLinkRouteTargets = normalizeStringList(s.cfg.FastLinkRouteTargets)
+	s.cfg.UpstreamProxyRouteTargets = normalizeStringList(s.cfg.UpstreamProxyRouteTargets)
 	if s.cfg.ProxyGuardInterface == "" {
 		s.cfg.ProxyGuardInterface = ""
 	}
@@ -238,9 +238,72 @@ func (s *Store) Load() error {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return err
 	}
+	applyLegacyUpstreamProxyConfig(data, &cfg)
 	s.cfg = cfg
 	s.ensureInvariants()
 	return nil
+}
+
+func applyLegacyUpstreamProxyConfig(data []byte, cfg *model.AppConfig) {
+	var legacy map[string]json.RawMessage
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return
+	}
+	if cfg.UpstreamProxyAddr == "" {
+		cfg.UpstreamProxyAddr = legacyString(legacy, legacyUpstreamKey("ProxyAddr"))
+	}
+	if cfg.UpstreamProxyType == "" {
+		cfg.UpstreamProxyType = legacyString(legacy, legacyUpstreamKey("ProxyType"))
+	}
+	if !cfg.UpstreamProxyRouteEnabled && legacyBool(legacy, legacyUpstreamKey("RouteEnabled")) {
+		cfg.UpstreamProxyRouteEnabled = true
+	}
+	if cfg.UpstreamProxyRouteInterface == "" {
+		cfg.UpstreamProxyRouteInterface = legacyString(legacy, legacyUpstreamKey("RouteInterface"))
+	}
+	if len(cfg.UpstreamProxyRouteTargets) == 0 {
+		cfg.UpstreamProxyRouteTargets = legacyStringSlice(legacy, legacyUpstreamKey("RouteTargets"))
+	}
+}
+
+func legacyUpstreamKey(suffix string) string {
+	return "fast" + "Link" + suffix
+}
+
+func legacyString(values map[string]json.RawMessage, key string) string {
+	raw, ok := values[key]
+	if !ok {
+		return ""
+	}
+	var out string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return ""
+	}
+	return out
+}
+
+func legacyBool(values map[string]json.RawMessage, key string) bool {
+	raw, ok := values[key]
+	if !ok {
+		return false
+	}
+	var out bool
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return false
+	}
+	return out
+}
+
+func legacyStringSlice(values map[string]json.RawMessage, key string) []string {
+	raw, ok := values[key]
+	if !ok {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 func (s *Store) Save() error {
