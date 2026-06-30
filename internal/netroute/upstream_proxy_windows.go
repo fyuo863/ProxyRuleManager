@@ -5,11 +5,10 @@ package netroute
 import (
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
-	"syscall"
+	"time"
 
-	"golang.org/x/sys/windows"
+	"proxy-rule-manager/internal/winps"
 )
 
 type applyRouteResult struct {
@@ -19,7 +18,7 @@ type applyRouteResult struct {
 }
 
 func discoverUpstreamProxyRemoteIPs(upstream string, programPaths []string) ([]string, error) {
-	output, err := runPowerShell(discoverUpstreamProxyRemoteIPsScript(upstream, programPaths))
+	output, err := runPowerShell("发现上游代理节点连接", discoverUpstreamProxyRemoteIPsScript(upstream, programPaths), 8*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +45,7 @@ func applyUpstreamProxyRoutes(interfaceAlias string, targets []string) (string, 
 	if len(targets) == 0 {
 		return "", nil
 	}
-	output, err := runPowerShell(applyUpstreamProxyRoutesScript(interfaceAlias, targets))
+	output, err := runPowerShell("应用代理节点路由", applyUpstreamProxyRoutesScript(interfaceAlias, targets), 20*time.Second)
 	if err != nil {
 		return "", err
 	}
@@ -61,7 +60,7 @@ func removeUpstreamProxyRoutes(targets []string, gateway string) error {
 	if len(targets) == 0 {
 		return nil
 	}
-	_, err := runPowerShell(removeUpstreamProxyRoutesScript(targets, gateway))
+	_, err := runPowerShell("清理代理节点路由", removeUpstreamProxyRoutesScript(targets, gateway), 20*time.Second)
 	return err
 }
 
@@ -181,19 +180,6 @@ func psLiteral(value string) string {
 	return strings.ReplaceAll(value, "'", "''")
 }
 
-func runPowerShell(script string) (string, error) {
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: windows.CREATE_NO_WINDOW,
-	}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		message := strings.TrimSpace(string(output))
-		if message == "" {
-			return "", err
-		}
-		return "", fmt.Errorf("%s", message)
-	}
-	return strings.TrimSpace(string(output)), nil
+func runPowerShell(operation, script string, timeout time.Duration) (string, error) {
+	return winps.Run(operation, script, timeout)
 }

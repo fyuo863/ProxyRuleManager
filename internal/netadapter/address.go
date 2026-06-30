@@ -9,3 +9,7 @@ func LookupIPv4(name string) (net.IP, error) {
 func LookupFallbackIPv4(excludeName string) (net.IP, string, error) {
 	return lookupFallbackIPv4(excludeName)
 }
+
+func ClearAddressCache() {
+	clearAddressCache()
+}

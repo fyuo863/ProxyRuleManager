@@ -302,12 +302,13 @@ func migrateTunAppProfiles(profiles []model.TunAppProfile, includedApps []string
 		}
 		remaining = nextRemaining
 		result = append(result, model.TunAppProfile{
-			ID:          uuid.NewString(),
-			Name:        name,
-			Enabled:     true,
-			Queries:     matched,
-			RoutingMode: routingMode,
-			Remark:      remark,
+			ID:                     uuid.NewString(),
+			Name:                   name,
+			Enabled:                true,
+			Queries:                matched,
+			RoutingMode:            routingMode,
+			BypassTransparentProxy: strings.EqualFold(name, "Steam Desktop"),
+			Remark:                 remark,
 		})
 	}
 
@@ -361,6 +362,7 @@ func (s *Store) Load() error {
 		return err
 	}
 	applyLegacyUpstreamProxyConfig(data, &cfg)
+	applyLegacyTunAppProfileDefaults(data, &cfg)
 	s.cfg = cfg
 	s.ensureInvariants()
 	return nil
@@ -386,6 +388,46 @@ func applyLegacyUpstreamProxyConfig(data []byte, cfg *model.AppConfig) {
 	if len(cfg.UpstreamProxyRouteTargets) == 0 {
 		cfg.UpstreamProxyRouteTargets = legacyStringSlice(legacy, legacyUpstreamKey("RouteTargets"))
 	}
+}
+
+func applyLegacyTunAppProfileDefaults(data []byte, cfg *model.AppConfig) {
+	var legacy map[string]json.RawMessage
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return
+	}
+	rawProfiles, ok := legacy["tunAppProfiles"]
+	if !ok {
+		return
+	}
+	var profiles []map[string]json.RawMessage
+	if err := json.Unmarshal(rawProfiles, &profiles); err != nil {
+		return
+	}
+	for idx, rawProfile := range profiles {
+		if idx >= len(cfg.TunAppProfiles) {
+			return
+		}
+		if _, exists := rawProfile["bypassTransparentProxy"]; exists {
+			continue
+		}
+		if isSteamTunProfile(cfg.TunAppProfiles[idx]) {
+			cfg.TunAppProfiles[idx].BypassTransparentProxy = true
+		}
+	}
+}
+
+func isSteamTunProfile(profile model.TunAppProfile) bool {
+	if strings.Contains(strings.ToLower(profile.Name), "steam") {
+		return true
+	}
+	for _, query := range profile.Queries {
+		for _, candidate := range steamTunIncludedApps {
+			if strings.EqualFold(query, candidate) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func legacyUpstreamKey(suffix string) string {

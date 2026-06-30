@@ -134,12 +134,13 @@ const (
 )
 
 type TunAppProfile struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Enabled     bool              `json:"enabled"`
-	Queries     []string          `json:"queries"`
-	RoutingMode TunAppRoutingMode `json:"routingMode"`
-	Remark      string            `json:"remark"`
+	ID                     string            `json:"id"`
+	Name                   string            `json:"name"`
+	Enabled                bool              `json:"enabled"`
+	Queries                []string          `json:"queries"`
+	RoutingMode            TunAppRoutingMode `json:"routingMode"`
+	BypassTransparentProxy bool              `json:"bypassTransparentProxy"`
+	Remark                 string            `json:"remark"`
 }
 
 type ManagedAppStatus struct {

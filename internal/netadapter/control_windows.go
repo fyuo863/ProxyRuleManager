@@ -4,11 +4,10 @@ package netadapter
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
-	"syscall"
+	"time"
 
-	"golang.org/x/sys/windows"
+	"proxy-rule-manager/internal/winps"
 )
 
 func setEnabled(name string, enabled bool) error {
@@ -30,23 +29,12 @@ func setEnabled(name string, enabled bool) error {
 		"if (-not $adapter) { throw \"未找到指定网卡: $name\" }\n" +
 		cmdlet + " -Name $name " + args + " | Out-Null\n"
 
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: windows.CREATE_NO_WINDOW,
+	operation := "停用网卡"
+	if enabled {
+		operation = "启用网卡"
 	}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		message := strings.TrimSpace(string(output))
-		if message == "" {
-			message = err.Error()
-		}
-		if enabled {
-			return fmt.Errorf("启用网卡失败: %s", message)
-		}
-		return fmt.Errorf("停用网卡失败: %s", message)
-	}
-	return nil
+	_, err := winps.Run(operation, script, 20*time.Second)
+	return err
 }
 
 func psLiteral(value string) string {

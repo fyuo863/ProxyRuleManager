@@ -4,12 +4,12 @@ package proxyguard
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
+	"time"
 
 	"proxy-rule-manager/internal/model"
+	"proxy-rule-manager/internal/winps"
 
 	"golang.org/x/sys/windows"
 )
@@ -178,20 +178,7 @@ func psLiteral(value string) string {
 }
 
 func runPowerShell(script string) (string, error) {
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: windows.CREATE_NO_WINDOW,
-	}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		message := strings.TrimSpace(string(output))
-		if message == "" {
-			return "", err
-		}
-		return "", fmt.Errorf("%s", message)
-	}
-	return strings.TrimSpace(string(output)), nil
+	return winps.Run("代理进程出口限制", script, 20*time.Second)
 }
 
 func isAdministrator() bool {

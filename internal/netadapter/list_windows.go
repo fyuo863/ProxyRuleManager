@@ -5,13 +5,11 @@ package netadapter
 import (
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
-	"syscall"
+	"time"
 
 	"proxy-rule-manager/internal/model"
-
-	"golang.org/x/sys/windows"
+	"proxy-rule-manager/internal/winps"
 )
 
 type adapterRecord struct {
@@ -21,29 +19,12 @@ type adapterRecord struct {
 }
 
 func list() ([]model.NetworkAdapterOption, error) {
-	cmd := exec.Command(
-		"powershell.exe",
-		"-NoProfile",
-		"-NonInteractive",
-		"-ExecutionPolicy",
-		"Bypass",
-		"-Command",
-		listAdaptersScript(),
-	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: windows.CREATE_NO_WINDOW,
-	}
-	output, err := cmd.CombinedOutput()
+	output, err := winps.Run("枚举网卡", listAdaptersScript(), 8*time.Second)
 	if err != nil {
-		message := strings.TrimSpace(string(output))
-		if message == "" {
-			message = err.Error()
-		}
-		return nil, fmt.Errorf("枚举网卡失败: %s", message)
+		return nil, err
 	}
 
-	raw := strings.TrimSpace(string(output))
+	raw := strings.TrimSpace(output)
 	if raw == "" || raw == "null" {
 		return []model.NetworkAdapterOption{}, nil
 	}

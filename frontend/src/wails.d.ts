@@ -77,6 +77,7 @@ export interface TunAppProfile {
   enabled: boolean;
   queries: string[];
   routingMode: TunAppRoutingMode;
+  bypassTransparentProxy: boolean;
   remark: string;
 }
 

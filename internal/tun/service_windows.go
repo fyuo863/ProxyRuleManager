@@ -12,7 +12,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -27,12 +26,14 @@ import (
 	"proxy-rule-manager/internal/model"
 	"proxy-rule-manager/internal/netadapter"
 	"proxy-rule-manager/internal/prmfs"
+	"proxy-rule-manager/internal/winps"
 )
 
 const (
 	transparentLogName   = "app-transparent.log"
 	bundledDriverDirName = "windivert"
 	transparentFWGroup   = "ProxyRuleManager Transparent Capture"
+	networkIdleFilter    = "tcp and ip and !loopback and tcp.SrcPort == 0 and tcp.DstPort == 0"
 )
 
 type WindowsService struct {
@@ -50,6 +51,8 @@ type WindowsService struct {
 	api           *winDivertAPI
 	networkHandle windows.Handle
 	socketHandle  windows.Handle
+	networkMu     sync.RWMutex
+	networkFilter string
 
 	logMu       sync.Mutex
 	logFile     *os.File
@@ -62,6 +65,7 @@ type WindowsService struct {
 	byRedirect  map[uint16]*redirectConnection
 	procCache   map[uint32]processInfo
 	udpBlocked  map[string]struct{}
+	udpBlocking map[string]*udpBlockCall
 
 	socketConnectEvents uint64
 	matchedConnects     uint64
@@ -95,6 +99,11 @@ type runtimeSnapshot struct {
 	LastMatchedProcess    string           `json:"lastMatchedProcess"`
 	LastSocketError       string           `json:"lastSocketError"`
 	LastUpstreamError     string           `json:"lastUpstreamError"`
+}
+
+type udpBlockCall struct {
+	done chan struct{}
+	err  error
 }
 
 type redirectConnection struct {
@@ -187,7 +196,7 @@ func (s *WindowsService) Start(options model.TunOptions) error {
 		return fmt.Errorf("打开 WinDivert SOCKET 层失败: %w", err)
 	}
 	networkHandle, err := api.open(
-		"tcp and ip and !loopback",
+		networkIdleFilter,
 		windivertLayerNetwork,
 		1000,
 		0,
@@ -205,6 +214,7 @@ func (s *WindowsService) Start(options model.TunOptions) error {
 	s.api = api
 	s.socketHandle = socketHandle
 	s.networkHandle = networkHandle
+	s.networkFilter = networkIdleFilter
 	s.logFile = logFile
 	s.options = options
 	s.profiles = resolveTunAppProfiles(options.AppProfiles, options.IncludedApps)
@@ -214,6 +224,7 @@ func (s *WindowsService) Start(options model.TunOptions) error {
 	s.byRedirect = map[uint16]*redirectConnection{}
 	s.procCache = map[uint32]processInfo{}
 	s.udpBlocked = map[string]struct{}{}
+	s.udpBlocking = map[string]*udpBlockCall{}
 	s.stopCh = make(chan struct{})
 	s.running = true
 	s.startedAt = time.Now()
@@ -255,15 +266,19 @@ func (s *WindowsService) Stop() error {
 	stopCh := s.stopCh
 	s.stopCh = nil
 	socketHandle := s.socketHandle
-	networkHandle := s.networkHandle
 	s.running = false
 	s.socketHandle = 0
-	s.networkHandle = 0
 	for _, conn := range s.connections {
 		_ = conn.listener.Close()
 	}
 	s.lastMessage = "正在停止应用级透明接管"
 	s.mu.Unlock()
+
+	s.networkMu.Lock()
+	networkHandle := s.networkHandle
+	s.networkHandle = 0
+	s.networkFilter = ""
+	s.networkMu.Unlock()
 
 	if stopCh != nil {
 		close(stopCh)
@@ -293,6 +308,8 @@ func (s *WindowsService) Stop() error {
 	s.connections = nil
 	s.byRedirect = nil
 	s.procCache = nil
+	s.udpBlocked = nil
+	s.udpBlocking = nil
 	s.lastMessage = "应用级透明接管已停止"
 	s.mu.Unlock()
 	s.persistRuntimeSnapshot()
@@ -443,11 +460,20 @@ func (s *WindowsService) networkLoop() {
 		if !s.isRunning() {
 			return
 		}
+		handle := s.currentNetworkHandle()
+		if handle == 0 {
+			time.Sleep(25 * time.Millisecond)
+			continue
+		}
 		var addr winDivertAddress
-		n, err := s.api.recv(s.networkHandle, packet, &addr)
+		n, err := s.api.recv(handle, packet, &addr)
 		if err != nil {
 			if !s.isRunning() || isClosedHandleErr(err) {
-				return
+				if !s.isRunning() {
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+				continue
 			}
 			s.logf("network recv error: %v", err)
 			time.Sleep(100 * time.Millisecond)
@@ -456,7 +482,7 @@ func (s *WindowsService) networkLoop() {
 		buf := packet[:n]
 		view, ok := parseIPv4TCPPacket(buf)
 		if !ok {
-			_ = s.api.send(s.networkHandle, buf, &addr)
+			_ = s.api.send(handle, buf, &addr)
 			continue
 		}
 
@@ -477,7 +503,7 @@ func (s *WindowsService) networkLoop() {
 			if err := s.api.calcChecksums(buf, &addr); err != nil {
 				s.logf("checksum reverse reflect failed: %v", err)
 			}
-			if err := s.api.send(s.networkHandle, buf, &addr); err != nil {
+			if err := s.api.send(handle, buf, &addr); err != nil {
 				s.logf("reverse reflect send failed: %v", err)
 			} else {
 				atomic.AddUint64(&s.reverseReflected, 1)
@@ -504,7 +530,7 @@ func (s *WindowsService) networkLoop() {
 			if err := s.api.calcChecksums(buf, &addr); err != nil {
 				s.logf("checksum forward reflect failed: %v", err)
 			}
-			if err := s.api.send(s.networkHandle, buf, &addr); err != nil {
+			if err := s.api.send(handle, buf, &addr); err != nil {
 				s.logf("forward reflect send failed: %v", err)
 			} else {
 				atomic.AddUint64(&s.forwardReflected, 1)
@@ -514,10 +540,75 @@ func (s *WindowsService) networkLoop() {
 			continue
 		}
 
-		if err := s.api.send(s.networkHandle, buf, &addr); err != nil && s.isRunning() {
+		if err := s.api.send(handle, buf, &addr); err != nil && s.isRunning() {
 			s.logf("passthrough send failed: %v", err)
 		}
 	}
+}
+
+func (s *WindowsService) currentNetworkHandle() windows.Handle {
+	s.networkMu.RLock()
+	defer s.networkMu.RUnlock()
+	return s.networkHandle
+}
+
+func (s *WindowsService) refreshNetworkFilter() {
+	if !s.isRunning() || s.api == nil {
+		return
+	}
+	filter := s.buildNetworkFilter()
+
+	s.networkMu.Lock()
+	if filter == s.networkFilter {
+		s.networkMu.Unlock()
+		return
+	}
+	newHandle, err := s.api.open(filter, windivertLayerNetwork, 1000, 0)
+	if err != nil {
+		s.networkMu.Unlock()
+		s.logf("refresh network filter failed: %v", err)
+		return
+	}
+	_ = s.api.setParam(newHandle, windivertParamQueueLength, 8192)
+	_ = s.api.setParam(newHandle, windivertParamQueueSize, 8*1024*1024)
+	_ = s.api.setParam(newHandle, windivertParamQueueTime, 2000)
+
+	oldHandle := s.networkHandle
+	s.networkHandle = newHandle
+	s.networkFilter = filter
+	s.networkMu.Unlock()
+
+	if oldHandle != 0 {
+		_ = s.api.close(oldHandle)
+	}
+}
+
+func (s *WindowsService) buildNetworkFilter() string {
+	s.mu.RLock()
+	connections := make([]*redirectConnection, 0, len(s.connections))
+	for _, conn := range s.connections {
+		connections = append(connections, conn)
+	}
+	s.mu.RUnlock()
+
+	if len(connections) == 0 {
+		return networkIdleFilter
+	}
+
+	parts := make([]string, 0, len(connections)*2)
+	for _, conn := range connections {
+		if conn == nil {
+			continue
+		}
+		parts = append(parts,
+			fmt.Sprintf("(tcp.SrcPort == %d and tcp.DstPort == %d)", conn.localPort, conn.remotePort),
+			fmt.Sprintf("(tcp.SrcPort == %d and tcp.DstPort == %d)", conn.redirectPort, conn.remotePort),
+		)
+	}
+	if len(parts) == 0 {
+		return networkIdleFilter
+	}
+	return "tcp and ip and !loopback and (" + strings.Join(parts, " or ") + ")"
 }
 
 func (s *WindowsService) reaperLoop() {
@@ -571,6 +662,7 @@ func (s *WindowsService) registerConnection(proc processInfo, query string, prof
 	s.connections[localPort] = conn
 	s.byRedirect[conn.redirectPort] = conn
 	s.mu.Unlock()
+	s.refreshNetworkFilter()
 
 	atomic.AddUint64(&s.redirectPrepared, 1)
 	s.logf("redirect prepared query=%s pid=%d %s:%d -> %s:%d via local-port=%d", query, proc.pid, conn.localAddr, conn.localPort, conn.remoteAddr, conn.remotePort, conn.redirectPort)
@@ -589,6 +681,9 @@ func (s *WindowsService) unregisterConnection(localPort uint16) {
 		_ = conn.listener.Close()
 	}
 	s.mu.Unlock()
+	if conn != nil {
+		s.refreshNetworkFilter()
+	}
 }
 
 func (s *WindowsService) reapStaleConnections() {
@@ -606,6 +701,9 @@ func (s *WindowsService) reapStaleConnections() {
 	for _, conn := range stale {
 		s.logf("stale redirect removed pid=%d local-port=%d redirect-port=%d", conn.processID, conn.localPort, conn.redirectPort)
 		_ = conn.listener.Close()
+	}
+	if len(stale) > 0 {
+		s.refreshNetworkFilter()
 	}
 }
 
@@ -1019,7 +1117,7 @@ func resolveTunAppProfiles(profiles []model.TunAppProfile, includedApps []string
 	out := make([]resolvedTunAppProfile, 0, len(profiles))
 	for _, profile := range profiles {
 		queries := normalizeApps(profile.Queries)
-		if len(queries) == 0 || !profile.Enabled {
+		if len(queries) == 0 || !profile.Enabled || profile.BypassTransparentProxy {
 			continue
 		}
 		mode := profile.RoutingMode
@@ -1253,19 +1351,39 @@ func (s *WindowsService) ensureUDPBlock(processPath string) error {
 	if key == "" {
 		return nil
 	}
-	s.mu.RLock()
+	s.mu.Lock()
 	_, exists := s.udpBlocked[key]
-	s.mu.RUnlock()
 	if exists {
+		s.mu.Unlock()
 		return nil
 	}
+	if s.udpBlocking == nil {
+		s.udpBlocking = map[string]*udpBlockCall{}
+	}
+	if call, ok := s.udpBlocking[key]; ok {
+		s.mu.Unlock()
+		<-call.done
+		return call.err
+	}
+	call := &udpBlockCall{done: make(chan struct{})}
+	s.udpBlocking[key] = call
+	s.mu.Unlock()
+
 	if _, err := runPowerShell(addTransparentUDPBlockScript(processPath)); err != nil {
+		s.mu.Lock()
+		call.err = err
+		delete(s.udpBlocking, key)
+		close(call.done)
+		s.mu.Unlock()
 		return err
 	}
+
 	s.mu.Lock()
 	if s.udpBlocked != nil {
 		s.udpBlocked[key] = struct{}{}
 	}
+	delete(s.udpBlocking, key)
+	close(call.done)
 	s.mu.Unlock()
 	return nil
 }
@@ -1419,18 +1537,5 @@ func psLiteral(value string) string {
 }
 
 func runPowerShell(script string) (string, error) {
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: windows.CREATE_NO_WINDOW,
-	}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		message := strings.TrimSpace(string(output))
-		if message == "" {
-			return "", err
-		}
-		return "", fmt.Errorf("%s", message)
-	}
-	return strings.TrimSpace(string(output)), nil
+	return winps.Run("透明接管防火墙规则", script, 20*time.Second)
 }

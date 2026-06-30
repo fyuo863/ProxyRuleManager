@@ -35,6 +35,7 @@ const appPresets: AppPreset[] = [
       enabled: true,
       queries: defaultTunIncludedApps,
       routingMode: "FORCE_PROXY",
+      bypassTransparentProxy: false,
       remark: "覆盖 Codex 桌面主进程、CLI 和命令执行子进程；默认全部走代理。",
     },
     description: "保留之前的 Codex 透明接管配置，覆盖桌面主进程、CLI 和命令执行子进程。",
@@ -49,9 +50,10 @@ const appPresets: AppPreset[] = [
       enabled: true,
       queries: defaultSteamApps,
       routingMode: "RULES_DIRECT_FALLBACK",
-      remark: "接管 Steam 主进程和 Web Helper；商店/社区优先按规则走代理，其它未识别连接默认直连。",
+      bypassTransparentProxy: true,
+      remark: "高吞吐下载默认绕过透明接管，仅保留进程监控；需要代理商店/社区时建议使用系统 PAC 或单独关闭绕过。",
     },
-    description: "接管 Steam 主进程和 Web Helper；商店/社区域名走代理，其它下载流量默认直连。",
+    description: "监控 Steam 主进程和 Web Helper，但默认不把游戏下载流量送入透明接管数据面。",
   },
 ];
 
@@ -62,6 +64,7 @@ const defaultTunAppProfiles: TunAppProfile[] = [
     enabled: true,
     queries: defaultTunIncludedApps,
     routingMode: "FORCE_PROXY",
+    bypassTransparentProxy: false,
     remark: "覆盖 Codex 桌面主进程、CLI 和命令执行子进程；默认全部走代理。",
   },
 ];
@@ -95,6 +98,7 @@ const createTunAppProfile = (profile?: Partial<TunAppProfile>): TunAppProfile =>
   enabled: profile?.enabled ?? true,
   queries: Array.isArray(profile?.queries) ? profile!.queries : [],
   routingMode: profile?.routingMode ?? "RULES_PROXY_FALLBACK",
+  bypassTransparentProxy: profile?.bypassTransparentProxy ?? false,
   remark: profile?.remark ?? "",
 });
 
@@ -313,6 +317,7 @@ function App() {
   const [editingTunApp, setEditingTunApp] = useState<TunAppProfile | null>(null);
   const [tunAppPresetId, setTunAppPresetId] = useState(appPresets[0]?.id ?? "");
   const settingsDirtyRef = useRef(false);
+  const refreshInFlightRef = useRef(false);
   const adapterOptions = useMemo(
     () => buildAdapterOptions(state.availableNetworkAdapters, [
       settingsDraft.proxyInterfaceName,
@@ -350,12 +355,18 @@ function App() {
   };
 
   const refresh = async () => {
+    if (refreshInFlightRef.current) {
+      return;
+    }
+    refreshInFlightRef.current = true;
     try {
       const next = normalizeState(await invoke<AppState>("GetState"));
       applyNextState(next);
       setError("");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      refreshInFlightRef.current = false;
     }
   };
 
@@ -1160,6 +1171,7 @@ function App() {
                         <div className="preview-item tun-app-summary">
                           <strong>{selectedTunApp.name || "未命名应用"}</strong>
                           <span className="muted">策略：{routingModeOptions.find((item) => item.value === selectedTunApp.routingMode)?.label || selectedTunApp.routingMode}</span>
+                          <span className="muted">数据面：{selectedTunApp.bypassTransparentProxy ? "绕过透明接管，仅监控" : "进入透明接管"}</span>
                           <span className="muted">匹配进程：{selectedTunApp.queries.join("、") || "未填写"}</span>
                         </div>
                       </>
@@ -1198,7 +1210,7 @@ function App() {
                     启动时自动启动应用透明接管
                   </label>
                   <div className="hint full">`Codex.exe` 会覆盖桌面主进程，`codex.exe` 会覆盖内置 CLI / resources 子进程，`codex-command-runner-*.exe` 用来兜住带版本号的命令执行子进程。</div>
-                  <div className="hint full">这里的应用名单会直接决定哪些进程进入透明接管数据面；未命中的其它系统流量不会被卷入。</div>
+                  <div className="hint full">未勾选“绕过透明接管”的应用会进入透明接管数据面；已绕过的应用只做进程监控，不参与逐包转发。</div>
                   <div className="hint full">当前透明接管由 WinDivert 在 Windows 上按进程拦截 TCP 连接，再通过本程序经上游 HTTP CONNECT 或 SOCKS5 建立隧道。</div>
                   <div className="hint full">如果上游代理地址填写的是 `127.0.0.1` 或 `localhost`，最终外网出口仍由那个本地代理程序自己决定；需要固定出口时，请继续使用“代理进程出口限制”。</div>
                   <div className="hint full">当前优先透明接管 TCP；对已识别到实际路径的目标进程，会额外下发 UDP 出站阻断规则，尽量压住 QUIC/UDP 旁路。</div>
@@ -1270,6 +1282,11 @@ function App() {
                 </select>
               </label>
               <div className="hint full">{routingModeOptions.find((item) => item.value === editingTunApp.routingMode)?.description || "未选择策略"}</div>
+              <label className="check full">
+                <input type="checkbox" checked={editingTunApp.bypassTransparentProxy} onChange={(e) => setEditingTunApp({ ...editingTunApp, bypassTransparentProxy: e.target.checked })} />
+                高吞吐应用绕过透明接管，仅保留进程监控
+              </label>
+              <div className="hint full">开启后，这组进程不会进入 WinDivert 逐包透明转发路径，适合 Steam、游戏下载器、网盘同步等大流量下载应用。</div>
               <label className="full">
                 匹配进程
                 <textarea

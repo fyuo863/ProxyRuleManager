@@ -254,7 +254,7 @@ func (a *App) getState(forceAdapters bool) model.AppState {
 		AddressCIDR:       cfg.TunAddressCIDR,
 		MTU:               cfg.TunMTU,
 		AppProfiles:       cfg.TunAppProfiles,
-		IncludedApps:      flattenTunAppProfileQueries(cfg.TunAppProfiles, cfg.TunIncludedApps),
+		IncludedApps:      flattenTunTransparentAppProfileQueries(cfg.TunAppProfiles, cfg.TunIncludedApps),
 		UpstreamProxyAddr: cfg.UpstreamProxyAddr,
 		UpstreamProxyType: cfg.UpstreamProxyType,
 		ProxyInterface:    cfg.ProxyInterfaceName,
@@ -278,7 +278,7 @@ func (a *App) getState(forceAdapters bool) model.AppState {
 			TunRunning:                a.tunRunning && tunStatus.Running,
 			TunAvailable:              tunStatus.Available,
 			TunMessage:                tunStatus.Message,
-			TunIncludedAppCount:       len(flattenTunAppProfileQueries(cfg.TunAppProfiles, cfg.TunIncludedApps)),
+			TunIncludedAppCount:       len(flattenTunTransparentAppProfileQueries(cfg.TunAppProfiles, cfg.TunIncludedApps)),
 			ManagedAppCount:           len(managedSnapshot.ManagedApps),
 			ManagedProcessCount:       managedSnapshot.ManagedProcessCount,
 			ManagedConnectionCount:    managedSnapshot.ManagedConnectionCount,
@@ -462,7 +462,7 @@ func (a *App) StartTunService() error {
 		AddressCIDR:       cfg.TunAddressCIDR,
 		MTU:               cfg.TunMTU,
 		AppProfiles:       cfg.TunAppProfiles,
-		IncludedApps:      flattenTunAppProfileQueries(cfg.TunAppProfiles, cfg.TunIncludedApps),
+		IncludedApps:      flattenTunTransparentAppProfileQueries(cfg.TunAppProfiles, cfg.TunIncludedApps),
 		UpstreamProxyAddr: cfg.UpstreamProxyAddr,
 		UpstreamProxyType: cfg.UpstreamProxyType,
 		ProxyInterface:    cfg.ProxyInterfaceName,
@@ -818,6 +818,7 @@ func (a *App) reloadTunIfRunning() error {
 }
 
 func (a *App) SaveSettings(next model.AppConfig) (model.AppState, error) {
+	before := a.config.Get()
 	restartPac := a.pacRunning
 	restartProxy := a.proxyRunning
 	restartTun := a.tunRunning
@@ -858,6 +859,10 @@ func (a *App) SaveSettings(next model.AppConfig) (model.AppState, error) {
 	}
 	if err := a.config.Save(); err != nil {
 		return a.GetState(), err
+	}
+	if strings.TrimSpace(before.DirectInterfaceName) != strings.TrimSpace(next.DirectInterfaceName) ||
+		strings.TrimSpace(before.ProxyInterfaceName) != strings.TrimSpace(next.ProxyInterfaceName) {
+		netadapter.ClearAddressCache()
 	}
 	if a.appMonitor != nil {
 		a.appMonitor.UpdateIncludedApps(flattenTunAppProfileQueries(next.TunAppProfiles, next.TunIncludedApps))
@@ -929,6 +934,20 @@ func flattenTunAppProfileQueries(profiles []model.TunAppProfile, legacy []string
 	values := make([]string, 0, len(profiles)*2)
 	for _, profile := range profiles {
 		if !profile.Enabled {
+			continue
+		}
+		values = append(values, profile.Queries...)
+	}
+	return normalizeQueryList(values)
+}
+
+func flattenTunTransparentAppProfileQueries(profiles []model.TunAppProfile, legacy []string) []string {
+	if len(profiles) == 0 {
+		return normalizeQueryList(legacy)
+	}
+	values := make([]string, 0, len(profiles)*2)
+	for _, profile := range profiles {
+		if !profile.Enabled || profile.BypassTransparentProxy {
 			continue
 		}
 		values = append(values, profile.Queries...)
@@ -1102,6 +1121,7 @@ func (a *App) SetNetworkAdapterEnabled(name string, enabled bool) (model.AppStat
 		a.lastError = err.Error()
 		return a.getState(true), err
 	}
+	netadapter.ClearAddressCache()
 	a.adaptersSeen = nil
 	a.adaptersAt = time.Time{}
 	if err := a.reconcileProxyGuard(a.config.Get()); err != nil {

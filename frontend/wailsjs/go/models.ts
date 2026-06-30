@@ -258,6 +258,7 @@ export namespace model {
 	    enabled: boolean;
 	    queries: string[];
 	    routingMode: string;
+	    bypassTransparentProxy: boolean;
 	    remark: string;
 	
 	    static createFrom(source: any = {}) {
@@ -271,6 +272,7 @@ export namespace model {
 	        this.enabled = source["enabled"];
 	        this.queries = source["queries"];
 	        this.routingMode = source["routingMode"];
+	        this.bypassTransparentProxy = source["bypassTransparentProxy"];
 	        this.remark = source["remark"];
 	    }
 	}
