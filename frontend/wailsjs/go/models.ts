@@ -252,6 +252,28 @@ export namespace model {
 	        this.proxyServer = source["proxyServer"];
 	    }
 	}
+	export class TunAppProfile {
+	    id: string;
+	    name: string;
+	    enabled: boolean;
+	    queries: string[];
+	    routingMode: string;
+	    remark: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TunAppProfile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.enabled = source["enabled"];
+	        this.queries = source["queries"];
+	        this.routingMode = source["routingMode"];
+	        this.remark = source["remark"];
+	    }
+	}
 	export class Rule {
 	    id: string;
 	    enabled: boolean;
@@ -293,6 +315,7 @@ export namespace model {
 	    tunInterfaceName: string;
 	    tunAddressCidr: string;
 	    tunMtu: number;
+	    tunAppProfiles: TunAppProfile[];
 	    tunIncludedApps: string[];
 	    autoStartTunService: boolean;
 	    autoStartPacService: boolean;
@@ -324,6 +347,7 @@ export namespace model {
 	        this.tunInterfaceName = source["tunInterfaceName"];
 	        this.tunAddressCidr = source["tunAddressCidr"];
 	        this.tunMtu = source["tunMtu"];
+	        this.tunAppProfiles = this.convertValues(source["tunAppProfiles"], TunAppProfile);
 	        this.tunIncludedApps = source["tunIncludedApps"];
 	        this.autoStartTunService = source["autoStartTunService"];
 	        this.autoStartPacService = source["autoStartPacService"];
@@ -554,6 +578,7 @@ export namespace model {
 		    return a;
 		}
 	}
+	
 	
 	
 	

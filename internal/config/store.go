@@ -28,6 +28,11 @@ var defaultTunIncludedApps = []string{
 	"codex-command-runner-*.exe",
 }
 
+var steamTunIncludedApps = []string{
+	"steam.exe",
+	"steamwebhelper.exe",
+}
+
 func defaultRules() []model.Rule {
 	base := rules.CommonDomainRules()
 	out := make([]model.Rule, 0, len(base)+1)
@@ -48,6 +53,7 @@ func defaultRules() []model.Rule {
 }
 
 func defaultConfig() model.AppConfig {
+	defaultProfiles := defaultTunAppProfiles()
 	return model.AppConfig{
 		Rules:                       defaultRules(),
 		PacListenAddr:               "127.0.0.1:18088",
@@ -65,7 +71,8 @@ func defaultConfig() model.AppConfig {
 		TunInterfaceName:            "ProxyRuleManagerTun",
 		TunAddressCIDR:              "172.19.0.1/30",
 		TunMTU:                      1500,
-		TunIncludedApps:             defaultTunIncludedAppsCopy(),
+		TunAppProfiles:              defaultProfiles,
+		TunIncludedApps:             flattenTunAppProfiles(defaultProfiles),
 		AutoStartTunService:         false,
 		AutoStartPacService:         false,
 		AutoStartProxyService:       false,
@@ -141,11 +148,8 @@ func (s *Store) ensureInvariants() {
 	if s.cfg.TunMTU <= 0 {
 		s.cfg.TunMTU = 1500
 	}
-	if s.cfg.TunIncludedApps == nil || isLegacyTunIncludedApps(s.cfg.TunIncludedApps) {
-		s.cfg.TunIncludedApps = defaultTunIncludedAppsCopy()
-	} else {
-		s.cfg.TunIncludedApps = normalizeTunIncludedApps(s.cfg.TunIncludedApps)
-	}
+	s.cfg.TunAppProfiles = migrateTunAppProfiles(s.cfg.TunAppProfiles, s.cfg.TunIncludedApps)
+	s.cfg.TunIncludedApps = flattenTunAppProfiles(s.cfg.TunAppProfiles)
 	if s.cfg.MaxLogEntries <= 0 {
 		s.cfg.MaxLogEntries = 500
 	}
@@ -196,6 +200,19 @@ func defaultTunIncludedAppsCopy() []string {
 	return out
 }
 
+func defaultTunAppProfiles() []model.TunAppProfile {
+	return []model.TunAppProfile{
+		{
+			ID:          uuid.NewString(),
+			Name:        "Codex Desktop",
+			Enabled:     true,
+			Queries:     defaultTunIncludedAppsCopy(),
+			RoutingMode: model.TunAppRoutingForceProxy,
+			Remark:      "覆盖 Codex 桌面主进程、CLI 与命令执行子进程；默认全部走代理。",
+		},
+	}
+}
+
 func isLegacyTunIncludedApps(values []string) bool {
 	normalized := normalizeTunIncludedApps(values)
 	return len(normalized) == 1 && strings.EqualFold(normalized[0], "Codex.exe")
@@ -203,6 +220,111 @@ func isLegacyTunIncludedApps(values []string) bool {
 
 func normalizeTunIncludedApps(values []string) []string {
 	return normalizeStringList(values)
+}
+
+func normalizeTunAppProfiles(values []model.TunAppProfile) []model.TunAppProfile {
+	out := make([]model.TunAppProfile, 0, len(values))
+	for index, value := range values {
+		value.Name = strings.TrimSpace(value.Name)
+		if value.Name == "" {
+			value.Name = "应用 " + strings.TrimSpace(uuid.NewString()[:8])
+		}
+		if value.ID == "" {
+			value.ID = uuid.NewString()
+		}
+		value.Queries = normalizeTunIncludedApps(value.Queries)
+		if value.RoutingMode == "" {
+			value.RoutingMode = model.TunAppRoutingRulesProxyFallback
+		}
+		switch value.RoutingMode {
+		case model.TunAppRoutingRulesProxyFallback, model.TunAppRoutingRulesDirectFallback, model.TunAppRoutingForceProxy, model.TunAppRoutingForceDirect:
+		default:
+			value.RoutingMode = model.TunAppRoutingRulesProxyFallback
+		}
+		value.Remark = strings.TrimSpace(value.Remark)
+		if !value.Enabled && len(value.Queries) == 0 {
+			continue
+		}
+		if len(value.Queries) == 0 {
+			value.Enabled = false
+		}
+		if index >= 0 {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func flattenTunAppProfiles(values []model.TunAppProfile) []string {
+	queries := make([]string, 0, len(values)*2)
+	for _, value := range values {
+		if !value.Enabled {
+			continue
+		}
+		queries = append(queries, value.Queries...)
+	}
+	return normalizeTunIncludedApps(queries)
+}
+
+func migrateTunAppProfiles(profiles []model.TunAppProfile, includedApps []string) []model.TunAppProfile {
+	if len(profiles) > 0 {
+		normalized := normalizeTunAppProfiles(profiles)
+		if len(normalized) > 0 {
+			return normalized
+		}
+	}
+
+	normalizedApps := normalizeTunIncludedApps(includedApps)
+	if len(normalizedApps) == 0 || isLegacyTunIncludedApps(normalizedApps) {
+		return defaultTunAppProfiles()
+	}
+
+	remaining := append([]string(nil), normalizedApps...)
+	result := make([]model.TunAppProfile, 0, 3)
+	tryExtract := func(name string, routingMode model.TunAppRoutingMode, remark string, candidates []string) {
+		matched := make([]string, 0, len(candidates))
+		nextRemaining := make([]string, 0, len(remaining))
+		for _, item := range remaining {
+			hit := false
+			for _, candidate := range candidates {
+				if strings.EqualFold(item, candidate) {
+					hit = true
+					matched = append(matched, item)
+					break
+				}
+			}
+			if !hit {
+				nextRemaining = append(nextRemaining, item)
+			}
+		}
+		if len(matched) == 0 {
+			return
+		}
+		remaining = nextRemaining
+		result = append(result, model.TunAppProfile{
+			ID:          uuid.NewString(),
+			Name:        name,
+			Enabled:     true,
+			Queries:     matched,
+			RoutingMode: routingMode,
+			Remark:      remark,
+		})
+	}
+
+	tryExtract("Codex Desktop", model.TunAppRoutingForceProxy, "从旧版本应用名单迁移；默认全部走代理。", defaultTunIncludedApps)
+	tryExtract("Steam Desktop", model.TunAppRoutingRulesDirectFallback, "从旧版本应用名单迁移；商店/社区优先按规则走代理，其它未识别连接默认直连。", steamTunIncludedApps)
+
+	if len(remaining) > 0 {
+		result = append(result, model.TunAppProfile{
+			ID:          uuid.NewString(),
+			Name:        "迁移的应用",
+			Enabled:     true,
+			Queries:     remaining,
+			RoutingMode: model.TunAppRoutingRulesProxyFallback,
+			Remark:      "从旧版本透明接管应用名单自动迁移。",
+		})
+	}
+	return normalizeTunAppProfiles(result)
 }
 
 func normalizeStringList(values []string) []string {

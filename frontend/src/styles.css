@@ -493,6 +493,41 @@ h2 {
   border: 1px solid var(--line);
 }
 
+.tun-app-manager {
+  display: grid;
+  gap: 12px;
+}
+
+.tun-app-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  gap: 12px;
+  align-items: center;
+}
+
+.tun-app-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.tun-app-preview {
+  margin-top: 0;
+}
+
+.tun-app-card {
+  gap: 6px;
+  padding: 14px 16px;
+}
+
+.tun-app-summary {
+  gap: 6px;
+  padding: 14px 16px;
+}
+
+.tun-app-actions {
+  justify-content: space-between;
+}
+
 .hint {
   color: var(--muted);
   font-size: 13px;
@@ -728,6 +763,18 @@ h2 {
   .section-head button,
   .panel-header button {
     flex-shrink: 0;
+  }
+
+  .tun-app-header {
+    grid-template-columns: 1fr;
+  }
+
+  .tun-app-actions {
+    justify-content: stretch;
+  }
+
+  .tun-app-actions > button {
+    flex: 1 1 180px;
   }
 }
 

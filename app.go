@@ -77,7 +77,7 @@ func (a *App) startup(ctx context.Context) {
 	a.logStore = logs.NewStore(store.Get().MaxLogEntries)
 	a.appMonitor = appmonitor.NewService(a.addLog, a.updateLog, a.managedAppRouteHint)
 	a.rebuildServices()
-	a.appMonitor.Start(store.Get().TunIncludedApps)
+	a.appMonitor.Start(flattenTunAppProfileQueries(store.Get().TunAppProfiles, store.Get().TunIncludedApps))
 	if err := a.reconcileProxyGuard(store.Get()); err != nil {
 		a.lastError = err.Error()
 	}
@@ -253,7 +253,8 @@ func (a *App) getState(forceAdapters bool) model.AppState {
 		InterfaceName:     cfg.TunInterfaceName,
 		AddressCIDR:       cfg.TunAddressCIDR,
 		MTU:               cfg.TunMTU,
-		IncludedApps:      cfg.TunIncludedApps,
+		AppProfiles:       cfg.TunAppProfiles,
+		IncludedApps:      flattenTunAppProfileQueries(cfg.TunAppProfiles, cfg.TunIncludedApps),
 		UpstreamProxyAddr: cfg.UpstreamProxyAddr,
 		UpstreamProxyType: cfg.UpstreamProxyType,
 		ProxyInterface:    cfg.ProxyInterfaceName,
@@ -277,7 +278,7 @@ func (a *App) getState(forceAdapters bool) model.AppState {
 			TunRunning:                a.tunRunning && tunStatus.Running,
 			TunAvailable:              tunStatus.Available,
 			TunMessage:                tunStatus.Message,
-			TunIncludedAppCount:       len(cfg.TunIncludedApps),
+			TunIncludedAppCount:       len(flattenTunAppProfileQueries(cfg.TunAppProfiles, cfg.TunIncludedApps)),
 			ManagedAppCount:           len(managedSnapshot.ManagedApps),
 			ManagedProcessCount:       managedSnapshot.ManagedProcessCount,
 			ManagedConnectionCount:    managedSnapshot.ManagedConnectionCount,
@@ -460,7 +461,8 @@ func (a *App) StartTunService() error {
 		InterfaceName:     cfg.TunInterfaceName,
 		AddressCIDR:       cfg.TunAddressCIDR,
 		MTU:               cfg.TunMTU,
-		IncludedApps:      cfg.TunIncludedApps,
+		AppProfiles:       cfg.TunAppProfiles,
+		IncludedApps:      flattenTunAppProfileQueries(cfg.TunAppProfiles, cfg.TunIncludedApps),
 		UpstreamProxyAddr: cfg.UpstreamProxyAddr,
 		UpstreamProxyType: cfg.UpstreamProxyType,
 		ProxyInterface:    cfg.ProxyInterfaceName,
@@ -841,7 +843,8 @@ func (a *App) SaveSettings(next model.AppConfig) (model.AppState, error) {
 		cfg.TunInterfaceName = next.TunInterfaceName
 		cfg.TunAddressCIDR = next.TunAddressCIDR
 		cfg.TunMTU = next.TunMTU
-		cfg.TunIncludedApps = next.TunIncludedApps
+		cfg.TunAppProfiles = next.TunAppProfiles
+		cfg.TunIncludedApps = flattenTunAppProfileQueries(next.TunAppProfiles, next.TunIncludedApps)
 		cfg.AutoStartTunService = next.AutoStartTunService
 		cfg.AutoStartPacService = next.AutoStartPacService
 		cfg.AutoStartProxyService = next.AutoStartProxyService
@@ -857,7 +860,7 @@ func (a *App) SaveSettings(next model.AppConfig) (model.AppState, error) {
 		return a.GetState(), err
 	}
 	if a.appMonitor != nil {
-		a.appMonitor.UpdateIncludedApps(next.TunIncludedApps)
+		a.appMonitor.UpdateIncludedApps(flattenTunAppProfileQueries(next.TunAppProfiles, next.TunIncludedApps))
 	}
 
 	if restartPac {
@@ -914,9 +917,41 @@ func (a *App) SaveSettings(next model.AppConfig) (model.AppState, error) {
 
 func (a *App) managedAppRouteHint(processName, processPath string) (model.RuleTarget, string) {
 	if a.tunRunning {
-		return model.RuleTargetProxy, "已识别到目标进程；当前应用级透明接管已启用，匹配进程的 TCP 连接会被直接导入上游代理链"
+		return model.RuleTargetProxy, "已识别到目标进程；当前应用级透明接管已启用，会优先识别 TLS SNI / HTTP Host 并按规则决定 PROXY 或 DIRECT，未识别主机名时默认回退到代理链"
 	}
 	return model.RuleTargetDirect, "进程级识别已启用；当前仅观测应用连接，透明接管尚未启动"
+}
+
+func flattenTunAppProfileQueries(profiles []model.TunAppProfile, legacy []string) []string {
+	if len(profiles) == 0 {
+		return normalizeQueryList(legacy)
+	}
+	values := make([]string, 0, len(profiles)*2)
+	for _, profile := range profiles {
+		if !profile.Enabled {
+			continue
+		}
+		values = append(values, profile.Queries...)
+	}
+	return normalizeQueryList(values)
+}
+
+func normalizeQueryList(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func (a *App) ExportConfig() error {

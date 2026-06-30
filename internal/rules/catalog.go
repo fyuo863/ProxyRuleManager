@@ -87,6 +87,18 @@ var commonDomainFamilies = []DomainFamily{
 			"cloudmessaging.edge.microsoft.com",
 		},
 	},
+	{
+		Key:    "steam",
+		Folder: "游戏平台 / Steam",
+		Remark: "Steam 商店、社区与帮助中心域名",
+		Domains: []string{
+			"steamcommunity.com",
+			"store.steampowered.com",
+			"help.steampowered.com",
+			"api.steampowered.com",
+			"steamstatic.com",
+		},
+	},
 }
 
 func CommonDomainRules() []model.Rule {

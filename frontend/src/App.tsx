@@ -9,9 +9,122 @@ import type {
   RuleTarget,
   RuleType,
   TrafficLog,
+  TunAppProfile,
+  TunAppRoutingMode,
 } from "./wails";
 
 const defaultTunIncludedApps = ["Codex.exe", "codex.exe", "codex-command-runner-*.exe"];
+const defaultSteamApps = ["steam.exe", "steamwebhelper.exe"];
+
+type AppPreset = {
+  id: string;
+  label: string;
+  category: string;
+  profile: TunAppProfile;
+  description: string;
+};
+
+const appPresets: AppPreset[] = [
+  {
+    id: "codex",
+    label: "Codex Desktop",
+    category: "开发 / AI",
+    profile: {
+      id: "",
+      name: "Codex Desktop",
+      enabled: true,
+      queries: defaultTunIncludedApps,
+      routingMode: "FORCE_PROXY",
+      remark: "覆盖 Codex 桌面主进程、CLI 和命令执行子进程；默认全部走代理。",
+    },
+    description: "保留之前的 Codex 透明接管配置，覆盖桌面主进程、CLI 和命令执行子进程。",
+  },
+  {
+    id: "steam",
+    label: "Steam Desktop",
+    category: "游戏平台",
+    profile: {
+      id: "",
+      name: "Steam Desktop",
+      enabled: true,
+      queries: defaultSteamApps,
+      routingMode: "RULES_DIRECT_FALLBACK",
+      remark: "接管 Steam 主进程和 Web Helper；商店/社区优先按规则走代理，其它未识别连接默认直连。",
+    },
+    description: "接管 Steam 主进程和 Web Helper；商店/社区域名走代理，其它下载流量默认直连。",
+  },
+];
+
+const defaultTunAppProfiles: TunAppProfile[] = [
+  {
+    id: "codex-default",
+    name: "Codex Desktop",
+    enabled: true,
+    queries: defaultTunIncludedApps,
+    routingMode: "FORCE_PROXY",
+    remark: "覆盖 Codex 桌面主进程、CLI 和命令执行子进程；默认全部走代理。",
+  },
+];
+
+const routingModeOptions: Array<{ value: TunAppRoutingMode; label: string; description: string }> = [
+  {
+    value: "FORCE_PROXY",
+    label: "全部走代理",
+    description: "无论域名是否可识别，当前应用的透明接管连接都走上游代理。",
+  },
+  {
+    value: "RULES_PROXY_FALLBACK",
+    label: "按规则匹配，未识别时走代理",
+    description: "优先识别 TLS SNI / HTTP Host 并按规则处理；识别不到时回退到代理。",
+  },
+  {
+    value: "RULES_DIRECT_FALLBACK",
+    label: "按规则匹配，未识别时直连",
+    description: "优先识别 TLS SNI / HTTP Host 并按规则处理；识别不到时回退到直连。",
+  },
+  {
+    value: "FORCE_DIRECT",
+    label: "全部直连",
+    description: "当前应用的透明接管连接全部直连，不经过上游代理。",
+  },
+];
+
+const createTunAppProfile = (profile?: Partial<TunAppProfile>): TunAppProfile => ({
+  id: profile?.id ?? "",
+  name: profile?.name ?? "",
+  enabled: profile?.enabled ?? true,
+  queries: Array.isArray(profile?.queries) ? profile!.queries : [],
+  routingMode: profile?.routingMode ?? "RULES_PROXY_FALLBACK",
+  remark: profile?.remark ?? "",
+});
+
+const applyTunPreset = (presetId: string, current?: Partial<TunAppProfile>): TunAppProfile => {
+  const preset = appPresets.find((item) => item.id === presetId);
+  if (!preset) {
+    return createTunAppProfile(current);
+  }
+  return createTunAppProfile({
+    ...preset.profile,
+    id: current?.id ?? "",
+  });
+};
+
+const flattenTunProfiles = (profiles: TunAppProfile[]) => {
+  const seen = new Set<string>();
+  const queries: string[] = [];
+  for (const profile of profiles) {
+    if (!profile.enabled) continue;
+    for (const raw of profile.queries ?? []) {
+      const value = raw.trim();
+      if (!value) continue;
+      const key = value.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      queries.push(value);
+    }
+  }
+  return queries;
+};
 
 const emptyState: AppState = {
   config: {
@@ -31,7 +144,8 @@ const emptyState: AppState = {
     tunInterfaceName: "ProxyRuleManagerTun",
     tunAddressCidr: "172.19.0.1/30",
     tunMtu: 1500,
-    tunIncludedApps: defaultTunIncludedApps,
+    tunAppProfiles: defaultTunAppProfiles,
+    tunIncludedApps: flattenTunProfiles(defaultTunAppProfiles),
     autoStartTunService: false,
     autoStartPacService: false,
     autoStartProxyService: false,
@@ -102,7 +216,8 @@ const normalizeConfig = (config?: Partial<AppConfig> | null): AppConfig => ({
   rules: Array.isArray(config?.rules) ? config.rules : emptyState.config.rules,
   proxyGuardProgramPaths: Array.isArray(config?.proxyGuardProgramPaths) ? config.proxyGuardProgramPaths : emptyState.config.proxyGuardProgramPaths,
   upstreamProxyRouteTargets: Array.isArray(config?.upstreamProxyRouteTargets) ? config.upstreamProxyRouteTargets : emptyState.config.upstreamProxyRouteTargets,
-  tunIncludedApps: Array.isArray(config?.tunIncludedApps) ? config.tunIncludedApps : emptyState.config.tunIncludedApps,
+  tunAppProfiles: Array.isArray(config?.tunAppProfiles) ? config.tunAppProfiles.map((item) => createTunAppProfile(item)) : emptyState.config.tunAppProfiles,
+  tunIncludedApps: Array.isArray(config?.tunIncludedApps) ? config.tunIncludedApps : flattenTunProfiles(Array.isArray(config?.tunAppProfiles) ? config.tunAppProfiles.map((item) => createTunAppProfile(item)) : emptyState.config.tunAppProfiles),
   savedWindowsProxyConfig: config?.savedWindowsProxyConfig ?? null,
 });
 
@@ -194,6 +309,9 @@ function App() {
   });
   const [batchMessage, setBatchMessage] = useState<string>("");
   const [settingsMessage, setSettingsMessage] = useState<string>("");
+  const [selectedTunAppId, setSelectedTunAppId] = useState(defaultTunAppProfiles[0]?.id ?? "");
+  const [editingTunApp, setEditingTunApp] = useState<TunAppProfile | null>(null);
+  const [tunAppPresetId, setTunAppPresetId] = useState(appPresets[0]?.id ?? "");
   const settingsDirtyRef = useRef(false);
   const adapterOptions = useMemo(
     () => buildAdapterOptions(state.availableNetworkAdapters, [
@@ -210,12 +328,25 @@ function App() {
     if (syncSettings || !settingsDirtyRef.current) {
       settingsDirtyRef.current = false;
       setSettingsDraft(next.config);
+      setSelectedTunAppId((prev) => {
+        const profiles = next.config.tunAppProfiles ?? [];
+        if (profiles.some((item) => item.id === prev)) {
+          return prev;
+        }
+        return profiles[0]?.id ?? "";
+      });
     }
   };
 
   const updateSettingsDraft = (patch: Partial<AppConfig>) => {
     settingsDirtyRef.current = true;
-    setSettingsDraft((prev) => ({ ...prev, ...patch }));
+    setSettingsDraft((prev) => {
+      const next = { ...prev, ...patch };
+      const profiles = Array.isArray(next.tunAppProfiles) ? next.tunAppProfiles.map((item) => createTunAppProfile(item)) : prev.tunAppProfiles;
+      next.tunAppProfiles = profiles;
+      next.tunIncludedApps = flattenTunProfiles(profiles);
+      return next;
+    });
   };
 
   const refresh = async () => {
@@ -286,6 +417,36 @@ function App() {
       .map((item) => ({ raw: item, ...detectRuleType(item) }));
   }, [batchDraft.content]);
 
+  const selectedTunApp = useMemo(
+    () => settingsDraft.tunAppProfiles.find((item) => item.id === selectedTunAppId) ?? settingsDraft.tunAppProfiles[0] ?? null,
+    [selectedTunAppId, settingsDraft.tunAppProfiles],
+  );
+
+  const appPresetCategories = useMemo(() => {
+    const grouped = new Map<string, AppPreset[]>();
+    for (const preset of appPresets) {
+      const current = grouped.get(preset.category) ?? [];
+      current.push(preset);
+      grouped.set(preset.category, current);
+    }
+    return Array.from(grouped.entries());
+  }, []);
+
+  const selectedTunAppStatuses = useMemo(() => {
+    if (!selectedTunApp) return [];
+    const statusMap = new Map(state.managedApps.map((item) => [item.query.toLowerCase(), item] as const));
+    return selectedTunApp.queries.map((query) => {
+      const matched = statusMap.get(query.toLowerCase());
+      return {
+        query,
+        running: matched?.running ?? false,
+        pidCount: matched?.pidCount ?? 0,
+        activeConnections: matched?.activeConnections ?? 0,
+        path: matched?.path ?? "",
+      };
+    });
+  }, [selectedTunApp, state.managedApps]);
+
   const runAction = async (action: () => Promise<unknown>) => {
     try {
       await action();
@@ -324,6 +485,62 @@ function App() {
       } catch {}
       setError(message);
     }
+  };
+
+  const mergeStringItems = (current: string[], incoming: string[]) => {
+    const seen = new Set<string>();
+    const next: string[] = [];
+    for (const raw of [...current, ...incoming]) {
+      const value = raw.trim();
+      if (!value) continue;
+      const key = value.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      next.push(value);
+    }
+    return next;
+  };
+
+  const upsertTunAppProfile = (profile: TunAppProfile) => {
+    const normalized = createTunAppProfile({
+      ...profile,
+      queries: mergeStringItems([], profile.queries ?? []),
+    });
+    const nextProfiles = [...settingsDraft.tunAppProfiles];
+    const index = nextProfiles.findIndex((item) => item.id === normalized.id && normalized.id);
+    if (index >= 0) {
+      nextProfiles[index] = normalized;
+    } else {
+      normalized.id = normalized.id || `tun-app-${Date.now()}`;
+      nextProfiles.push(normalized);
+    }
+    updateSettingsDraft({ tunAppProfiles: nextProfiles });
+    setSelectedTunAppId(normalized.id);
+  };
+
+  const deleteTunAppProfile = (id: string) => {
+    const nextProfiles = settingsDraft.tunAppProfiles.filter((item) => item.id !== id);
+    updateSettingsDraft({ tunAppProfiles: nextProfiles });
+    setSelectedTunAppId((prev) => (prev === id ? nextProfiles[0]?.id ?? "" : prev));
+  };
+
+  const openNewTunApp = () => {
+    setTunAppPresetId(appPresets[0]?.id ?? "");
+    setEditingTunApp(applyTunPreset(appPresets[0]?.id ?? "", { id: "", name: "", queries: [] }));
+  };
+
+  const openEditTunApp = () => {
+    if (!selectedTunApp) return;
+    setTunAppPresetId("");
+    setEditingTunApp(createTunAppProfile(selectedTunApp));
+  };
+
+  const submitTunApp = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!editingTunApp) return;
+    upsertTunAppProfile(editingTunApp);
+    setEditingTunApp(null);
+    setSettingsMessage(`已更新透明接管应用：${editingTunApp.name || "未命名应用"}，保存设置后生效。`);
   };
 
   const exportDiagnostics = async () => {
@@ -926,28 +1143,56 @@ function App() {
                     启用代理进程出口限制
                   </label>
                   <div className="hint full">当上游代理地址是 `127.0.0.1` 或 `localhost` 时，要固定真正的外网出口，可以直接启用这里的限制。若“代理进程出口网卡”留空，会默认跟随“上游代理出口网卡”；若“受控代理进程路径”留空，程序会优先尝试按本地监听端口自动识别代理进程。</div>
-                  <label className="full">
-                    透明接管应用名单
-                    <textarea
-                      rows={5}
-                      value={(settingsDraft.tunIncludedApps ?? []).join("\n")}
-                      onChange={(e) => updateSettingsDraft({ tunIncludedApps: e.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
-                      placeholder={"Codex.exe\ncodex.exe\ncodex-command-runner-*.exe"}
-                    />
-                  </label>
-                  {state.managedApps.length > 0 && (
-                    <div className="preview-list full">
-                      {state.managedApps.map((item) => (
-                        <div key={item.query} className="preview-item">
-                          <strong className="mono">{item.query}</strong>
-                          <span className="muted">
-                            {item.running ? `运行中，${item.pidCount} 个进程 / ${item.activeConnections} 条连接` : "当前未检测到运行中的匹配进程"}
-                          </span>
-                          {item.path && <span className="muted compact-ellipsis">{item.path}</span>}
-                        </div>
-                      ))}
+                  <div className="full tun-app-manager">
+                    <div className="tun-app-header">
+                      <span className="tun-app-title">透明接管应用名单</span>
+                      <select value={selectedTunApp?.id ?? ""} onChange={(e) => setSelectedTunAppId(e.target.value)}>
+                        {settingsDraft.tunAppProfiles.map((profile) => (
+                          <option key={profile.id} value={profile.id}>{profile.name || "未命名应用"}</option>
+                        ))}
+                      </select>
                     </div>
-                  )}
+                    {selectedTunApp ? (
+                      <>
+                        <div className="hint">
+                          {selectedTunApp.remark || routingModeOptions.find((item) => item.value === selectedTunApp.routingMode)?.description || "未填写说明"}
+                        </div>
+                        <div className="preview-item tun-app-summary">
+                          <strong>{selectedTunApp.name || "未命名应用"}</strong>
+                          <span className="muted">策略：{routingModeOptions.find((item) => item.value === selectedTunApp.routingMode)?.label || selectedTunApp.routingMode}</span>
+                          <span className="muted">匹配进程：{selectedTunApp.queries.join("、") || "未填写"}</span>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="hint">当前还没有配置透明接管应用，可先点下方“添加应用”。</div>
+                    )}
+                    {selectedTunAppStatuses.length > 0 ? (
+                      <div className="preview-list tun-app-preview">
+                        {selectedTunAppStatuses.map((item) => (
+                          <div key={item.query} className="preview-item tun-app-card">
+                            <strong className="mono">{item.query}</strong>
+                            <span className="muted">
+                              {item.running ? `运行中，${item.pidCount} 个进程 / ${item.activeConnections} 条连接` : "当前未检测到运行中的匹配进程"}
+                            </span>
+                            {item.path && <span className="muted compact-ellipsis">{item.path}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    ) : selectedTunApp ? <div className="hint">当前应用还没有配置匹配进程。</div> : null}
+                    <div className="inline-actions tun-app-actions">
+                      <button type="button" className="ghost" onClick={openEditTunApp} disabled={!selectedTunApp}>
+                        修改配置
+                      </button>
+                      <button type="button" onClick={openNewTunApp}>
+                        添加应用
+                      </button>
+                    </div>
+                    {selectedTunApp && settingsDraft.tunAppProfiles.length > 1 && (
+                      <button type="button" className="ghost danger" onClick={() => deleteTunAppProfile(selectedTunApp.id)}>
+                        删除当前应用
+                      </button>
+                    )}
+                  </div>
                   <label className="check full">
                     <input type="checkbox" checked={settingsDraft.autoStartTunService} onChange={(e) => updateSettingsDraft({ autoStartTunService: e.target.checked })} />
                     启动时自动启动应用透明接管
@@ -980,6 +1225,73 @@ function App() {
           )}
         </main>
       </div>
+
+      {editingTunApp && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="panel-header">
+              <h2>{editingTunApp.id ? "编辑透明接管应用" : "新增透明接管应用"}</h2>
+              <button className="ghost" onClick={() => setEditingTunApp(null)}>关闭</button>
+            </div>
+            <form className="form-grid compact-form" onSubmit={submitTunApp}>
+              <label>
+                预设模板
+                <div className="inline-actions">
+                  <select value={tunAppPresetId} onChange={(e) => setTunAppPresetId(e.target.value)}>
+                    <option value="">不套用预设</option>
+                    {appPresetCategories.map(([category, presets]) => (
+                      <optgroup key={category} label={category}>
+                        {presets.map((preset) => (
+                          <option key={preset.id} value={preset.id}>{preset.label}</option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => tunAppPresetId && setEditingTunApp(applyTunPreset(tunAppPresetId, editingTunApp))}
+                    disabled={!tunAppPresetId}
+                  >
+                    套用预设
+                  </button>
+                </div>
+              </label>
+              <label>
+                应用名称
+                <input value={editingTunApp.name} onChange={(e) => setEditingTunApp({ ...editingTunApp, name: e.target.value })} placeholder="例如：Steam Desktop / My Custom App" />
+              </label>
+              <label>
+                连接策略
+                <select value={editingTunApp.routingMode} onChange={(e) => setEditingTunApp({ ...editingTunApp, routingMode: e.target.value as TunAppRoutingMode })}>
+                  {routingModeOptions.map((item) => (
+                    <option key={item.value} value={item.value}>{item.label}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="hint full">{routingModeOptions.find((item) => item.value === editingTunApp.routingMode)?.description || "未选择策略"}</div>
+              <label className="full">
+                匹配进程
+                <textarea
+                  rows={5}
+                  value={(editingTunApp.queries ?? []).join("\n")}
+                  onChange={(e) => setEditingTunApp({ ...editingTunApp, queries: e.target.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) })}
+                  placeholder={"steam.exe\nsteamwebhelper.exe\nC:\\Program Files\\MyApp\\myapp.exe"}
+                />
+              </label>
+              <label className="full">
+                说明
+                <textarea rows={3} value={editingTunApp.remark} onChange={(e) => setEditingTunApp({ ...editingTunApp, remark: e.target.value })} placeholder="说明这个应用组的用途或特殊策略" />
+              </label>
+              <label className="check full">
+                <input type="checkbox" checked={editingTunApp.enabled} onChange={(e) => setEditingTunApp({ ...editingTunApp, enabled: e.target.checked })} />
+                启用这个透明接管应用配置
+              </label>
+              <button type="submit">保存应用配置</button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {editingRule && (
         <div className="modal-backdrop">

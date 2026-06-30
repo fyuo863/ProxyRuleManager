@@ -1,17 +1,22 @@
 # Proxy Rule Manager
 
-一个基于 `Go + Wails + React + TypeScript` 的 Windows 桌面小工具，用来把浏览器流量先引入本地分流代理，再按规则决定：
+一个基于 `Go + Wails + React + TypeScript` 的 Windows 桌面小工具，用来同时处理两类分流场景：
 
-- 命中 `PROXY` 的网站：`本程序 -> 代理 127.0.0.1:xxxx -> Wi-Fi`
-- 命中 `DIRECT` 的网站：`本程序 -> 目标网站 -> Windows 默认路由/有线`
-- 命中 `REJECT` 的网站：本程序直接拒绝
+- `WEB`：浏览器或遵守系统 PAC 的应用，先进入本地分流代理，再按规则决定：
+  - 命中 `PROXY` 的网站：`本程序 -> 上游代理 127.0.0.1:xxxx -> 实际出口`
+  - 命中 `DIRECT` 的网站：`本程序 -> 目标网站 -> Windows 默认路由/指定直连网卡`
+  - 命中 `REJECT` 的网站：本程序直接拒绝
+- `APP`：桌面应用透明接管。Windows 上可按进程名或路径接管指定应用的 TCP 连接，优先识别 `TLS SNI / HTTP Host` 后再按同一套规则决定 `PROXY / DIRECT / REJECT`
 
-本项目不做 HTTPS 解密，不做 MITM，不安装根证书，不抓包。日志完全来自真实经过本地代理的浏览器连接。
+本项目不做 HTTPS 解密，不做 MITM，不安装根证书。`WEB` 日志来自真实经过本地代理的连接，`APP` 日志来自真实经过透明接管数据面的连接。
 
 ## 功能
 
 - 本地 PAC 服务：`http://127.0.0.1:18088/proxy.pac`
 - 本地 HTTP/HTTPS CONNECT 分流代理：`127.0.0.1:18089`
+- Windows 应用透明接管：按进程名/路径接管指定桌面应用 TCP 连接
+- 应用级域名分流：对被接管应用优先识别 `TLS SNI / HTTP Host`，再复用同一套规则引擎
+- 透明接管应用预设：设置页内置按分类下拉预设，可一键加入 `Codex Desktop`、`Steam Desktop`
 - Windows 当前用户系统 PAC 启用/停用与恢复
 - 规则管理：新增、编辑、删除、启用/禁用、排序
 - 实时流量日志：规则命中、目标路径、上下行字节数、耗时、状态、错误
@@ -54,13 +59,29 @@ PAC 只能告诉浏览器“把流量发给哪个代理”，但它本身不会�
 
 ## 默认规则
 
-- `openai.com -> PROXY`
-- `chatgpt.com -> PROXY`
-- `oaistatic.com -> PROXY`
-- `oaiusercontent.com -> PROXY`
+- `OpenAI`：`openai.com`、`chatgpt.com`、`oaistatic.com`、`oaiusercontent.com`
+- `GitHub`：`github.com`、`githubassets.com`、`githubusercontent.com`、`github.dev`
+- `Google`：`google.com`、`google.com.hk`、`googleapis.com`、`googleusercontent.com`、`gstatic.com`、`ggpht.com`、`gvt1.com`、`gvt2.com`
+- `Anthropic`：`anthropic.com`、`claude.ai`
+- `Perplexity`：`perplexity.ai`、`pplx.ai`
+- `xAI`：`x.ai`、`grok.com`
+- `Steam`：`steamcommunity.com`、`store.steampowered.com`、`help.steampowered.com`、`api.steampowered.com`、`steamstatic.com`
+- `Microsoft 连通性`：`msftconnecttest.com`、`cloudmessaging.edge.microsoft.com`
 - `MATCH -> DIRECT`
 
 其中 `MATCH,DIRECT` 会始终保留在最后一条，作为兜底规则。
+
+## 默认透明接管应用名单
+
+初始默认值会保留 `Codex` 之前的配置：
+
+- `Codex.exe`
+- `codex.exe`
+- `codex-command-runner-*.exe`
+
+这组默认值会覆盖 Codex 桌面主进程、CLI 子进程和带版本号的命令执行子进程。
+
+如果你需要接管其他桌面应用，例如 `Steam`，推荐直接在设置页的“透明接管应用名单”里通过分类下拉选择预设，再点“加入名单”。
 
 ## 开发环境
 
@@ -156,13 +177,44 @@ wails build
 
 ## 使用方式
 
+### 仅做网页分流
+
 1. 启动程序。
 2. 点击“启动 PAC 服务”。
 3. 点击“启动本地分流代理”。
 4. 点击“启用系统 PAC”。
 5. 确认状态栏里 `AutoConfigURL` 指向 `http://127.0.0.1:18088/proxy.pac`。
-6. 保持 代理 本地 HTTP 代理可用：`127.0.0.1:7892`。
+6. 保持上游代理可用，例如 `127.0.0.1:7892`。
 7. 用浏览器访问目标站点，并在实时日志里观察命中结果。
+
+### 开启桌面应用透明接管
+
+1. 启动程序。
+2. 以管理员身份运行。
+3. 在“系统设置 -> 透明接管应用名单”里配置要接管的进程名或路径。
+4. 可直接从分类下拉中选择 `Codex Desktop` 或 `Steam Desktop`，点“加入名单”。
+5. 保存设置。
+6. 点击“启动应用透明接管”。
+7. 保持上游代理可用，例如 `127.0.0.1:7892`。
+8. 打开目标桌面应用，并在实时日志里观察 `Source=process` 的命中结果。
+
+### Steam 推荐配置
+
+如果你的目标是：
+
+- `Steam 商店 / 社区 -> 走代理`
+- `Steam 下载游戏 -> 走直连`
+
+推荐这样配置：
+
+1. 在透明接管应用名单里加入 `Steam Desktop` 预设。
+2. 保留内置 `Steam` 域名规则为 `PROXY`。
+3. 保持最后的 `MATCH,DIRECT` 兜底规则。
+
+这时：
+
+- 命中 `steamcommunity.com`、`store.steampowered.com`、`help.steampowered.com`、`api.steampowered.com`、`steamstatic.com` 的连接会走代理。
+- 未命中这些域名的其余 Steam TCP 连接会优先按现有规则继续判断，最后默认落到 `DIRECT`。
 
 ## 验证方法
 
@@ -182,6 +234,19 @@ bilibili.com -> DIRECT
 
 ```text
 douyin.com -> DIRECT
+```
+
+接管 `Steam` 后，访问社区页或商店页时，日志应出现类似：
+
+```text
+steamcommunity.com -> PROXY
+store.steampowered.com -> PROXY
+```
+
+如果命中的是非内置 Steam 社区/商店域名，且未单独配置为 `PROXY`，则会继续落到当前规则结果，通常是：
+
+```text
+<download-or-cdn-host> -> DIRECT
 ```
 
 ## 浏览器没有进入本程序时如何排查
@@ -206,6 +271,20 @@ douyin.com -> DIRECT
 - `pacListenAddr`
 - `proxyListenAddr`
 - `upstreamProxyAddr`
+- `upstreamProxyType`
+- `proxyInterfaceName`
+- `upstreamProxyRouteEnabled`
+- `upstreamProxyRouteInterface`
+- `upstreamProxyRouteTargets`
+- `proxyGuardEnabled`
+- `proxyGuardInterface`
+- `proxyGuardProgramPaths`
+- `directInterfaceName`
+- `tunInterfaceName`
+- `tunAddressCidr`
+- `tunMtu`
+- `tunIncludedApps`
+- `autoStartTunService`
 - `autoStartPacService`
 - `autoStartProxyService`
 - `autoEnableSystemPac`
@@ -213,43 +292,55 @@ douyin.com -> DIRECT
 - `maxLogEntries`
 - `savedWindowsProxyConfig`
 
+## 应用透明接管的工作方式
+
+当前透明接管链路是：
+
+1. WinDivert 在 Windows 上按进程拦截指定应用的 TCP 连接。
+2. 程序读取应用首包，优先尝试识别：
+   - `TLS ClientHello` 里的 `SNI`
+   - 明文 HTTP 请求里的 `Host`
+3. 如果识别到主机名，就复用现有规则引擎决定 `PROXY / DIRECT / REJECT`。
+4. 如果没有识别到主机名，会尝试按目标 IP 命中 `IP-CIDR`。
+5. 如果仍然无法匹配，为了尽量避免应用“无代理即不可用”，当前会回退到 `PROXY`。
+
+这意味着它非常适合：
+
+- `Steam` 这类“同一个桌面进程里既有社区/商店，又有下载流量”的场景
+- `Codex Desktop`、Electron、浏览器辅助进程等 TCP 为主的应用
+
 ## 限制说明
 
-- 只处理走系统代理/PAC 的应用流量
-- 不捕获不遵守系统代理的程序
-- 不捕获 UDP / QUIC / HTTP3
+- `WEB` 链路只处理走系统代理/PAC 的流量
+- `APP` 链路当前只透明接管 TCP，不直接转发 UDP / QUIC / HTTP3
+- 对已识别到实际路径的目标进程，程序会额外下发 UDP 出站阻断规则，尽量压住 QUIC/UDP 旁路，但不等于完整 UDP 代理
+- 应用透明接管需要管理员权限
+- 若应用首包里既没有可识别的 `TLS SNI`，也没有可识别的明文 HTTP `Host`，当前会回退走代理
 - `IP-CIDR` 只对“host 本身就是 IP”时生效，当前不会主动解析域名再做 CIDR 匹配
 - HTTPS 日志只记录 CONNECT 级别信息，不记录解密后的 URL 路径
 
-## 是否能管理应用流量，例如 Codex
+## 是否能管理应用流量，例如 Codex / Steam
 
-可以，但前提是该应用本身愿意走 Windows 系统代理或系统 PAC。
+可以，而且现在有两条路径：
 
-这意味着：
+- `WEB`：如果应用本身愿意走 Windows 系统代理或系统 PAC，它会像浏览器一样进入本地分流代理。
+- `APP`：如果应用不走系统代理，但你把它加入“透明接管应用名单”，程序会按进程在 Windows 上直接接管它的 TCP 连接。
 
-- 如果某个桌面应用和浏览器一样遵守系统代理设置，那么它的 HTTP / HTTPS 流量也可能进入本程序，并被按规则分流记录。
-- 如果某个应用使用自己的网络栈、自己直连、自己维护代理配置，或者走的是非 HTTP 协议，那么它可能完全绕过本程序。
-- 因此像 `Codex` 这类桌面应用，是否会被本程序接管，取决于它运行时是否真的采用 Windows 当前用户的系统 PAC，而不是只取决于“它是桌面应用”。
+对 `Codex`：
 
-换句话说，本程序当前能力是：
+- 默认透明接管应用名单已经覆盖 `Codex.exe`、`codex.exe`、`codex-command-runner-*.exe`
+- 即使它的某些子进程不走系统 PAC，也可以通过应用透明接管进入分流链路
 
-- 能管理“遵守系统 PAC 的应用流量”
-- 不能强制接管“绕过系统代理的应用流量”
+对 `Steam`：
 
-如果你后续希望进一步覆盖更多应用，方向通常有两类：
+- 推荐通过设置页预设把 `steam.exe`、`steamwebhelper.exe` 加入透明接管应用名单
+- 社区/商店相关域名默认已经内置为 `PROXY`
+- 下载流量若未命中这些站点，会继续按规则落到 `DIRECT`
 
-1. 继续走“系统代理/PAC”路线
+仍然要注意：
 
-- 适合浏览器、部分 Electron 应用、部分系统代理兼容应用
-- 无需管理员权限
-- 实现简单、风险低
-
-2. 改做“透明代理 / 驱动层 / WFP / TUN”路线
-
-- 才有机会管理那些不走系统代理的应用
-- 复杂度会显著上升
-- 往往需要管理员权限
-- 也会超出当前这个“本地 HTTP/HTTPS 分流代理”的设计范围
+- 非 TCP 协议、强自定义加密握手、纯 UDP/QUIC 应用不一定能被完整管理
+- 某些没有 `SNI`、也没有明文 `Host` 的连接，当前只能回退到代理或靠 `IP-CIDR` 规则处理
 
 ## 项目结构
 

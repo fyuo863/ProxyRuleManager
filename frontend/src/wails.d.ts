@@ -65,6 +65,21 @@ export interface WindowsProxyConfig {
   proxyServer: string;
 }
 
+export type TunAppRoutingMode =
+  | "RULES_PROXY_FALLBACK"
+  | "RULES_DIRECT_FALLBACK"
+  | "FORCE_PROXY"
+  | "FORCE_DIRECT";
+
+export interface TunAppProfile {
+  id: string;
+  name: string;
+  enabled: boolean;
+  queries: string[];
+  routingMode: TunAppRoutingMode;
+  remark: string;
+}
+
 export interface AppConfig {
   rules: Rule[];
   pacListenAddr: string;
@@ -82,6 +97,7 @@ export interface AppConfig {
   tunInterfaceName: string;
   tunAddressCidr: string;
   tunMtu: number;
+  tunAppProfiles: TunAppProfile[];
   tunIncludedApps: string[];
   autoStartTunService: boolean;
   autoStartPacService: boolean;

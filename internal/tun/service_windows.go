@@ -25,6 +25,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"proxy-rule-manager/internal/model"
+	"proxy-rule-manager/internal/netadapter"
 	"proxy-rule-manager/internal/prmfs"
 )
 
@@ -53,6 +54,8 @@ type WindowsService struct {
 	logMu       sync.Mutex
 	logFile     *os.File
 	options     model.TunOptions
+	profiles    []resolvedTunAppProfile
+	queryMap    map[string]resolvedTunAppProfile
 	queries     []string
 	configPath  string
 	connections map[uint16]*redirectConnection
@@ -98,6 +101,10 @@ type redirectConnection struct {
 	processID    uint32
 	processName  string
 	processPath  string
+	query        string
+	profileID    string
+	profileName  string
+	routingMode  model.TunAppRoutingMode
 	ifIdx        uint32
 	subIfIdx     uint32
 	localAddr    net.IP
@@ -114,6 +121,14 @@ type processInfo struct {
 	pid  uint32
 	name string
 	path string
+}
+
+type resolvedTunAppProfile struct {
+	ID          string
+	Name        string
+	RoutingMode model.TunAppRoutingMode
+	Remark      string
+	Queries     []string
 }
 
 func NewService() Service {
@@ -192,7 +207,9 @@ func (s *WindowsService) Start(options model.TunOptions) error {
 	s.networkHandle = networkHandle
 	s.logFile = logFile
 	s.options = options
-	s.queries = normalizeApps(options.IncludedApps)
+	s.profiles = resolveTunAppProfiles(options.AppProfiles, options.IncludedApps)
+	s.queries = flattenResolvedTunQueries(s.profiles)
+	s.queryMap = buildResolvedTunQueryMap(s.profiles)
 	s.connections = map[uint16]*redirectConnection{}
 	s.byRedirect = map[uint16]*redirectConnection{}
 	s.procCache = map[uint32]processInfo{}
@@ -313,7 +330,7 @@ func (s *WindowsService) Status(options model.TunOptions) model.TunRuntimeStatus
 			Message:   "当前仅支持 HTTP CONNECT 或 SOCKS5 上游",
 		}
 	}
-	if len(normalizeApps(options.IncludedApps)) == 0 {
+	if len(flattenResolvedTunQueries(resolveTunAppProfiles(options.AppProfiles, options.IncludedApps))) == 0 {
 		return model.TunRuntimeStatus{
 			Running:   s.isRunning(),
 			Available: false,
@@ -403,8 +420,9 @@ func (s *WindowsService) socketLoop() {
 			}
 			atomic.AddUint64(&s.matchedConnects, 1)
 			s.recordMatchedProcess(proc)
+			profile := s.profileForQuery(query)
 			s.logf("socket connect matched query=%s pid=%d proc=%s local=%s:%d remote=%s:%d", query, proc.pid, proc.path, localIP, socket.LocalPort, remoteIP, socket.RemotePort)
-			if err := s.registerConnection(proc, query, localIP, socket.LocalPort, remoteIP, socket.RemotePort); err != nil {
+			if err := s.registerConnection(proc, query, profile, localIP, socket.LocalPort, remoteIP, socket.RemotePort); err != nil {
 				s.logf("register redirect failed pid=%d local=%s:%d remote=%s:%d: %v", proc.pid, localIP, socket.LocalPort, remoteIP, socket.RemotePort, err)
 			}
 			if proc.path != "" {
@@ -435,7 +453,7 @@ func (s *WindowsService) networkLoop() {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		buf := append([]byte(nil), packet[:n]...)
+		buf := packet[:n]
 		view, ok := parseIPv4TCPPacket(buf)
 		if !ok {
 			_ = s.api.send(s.networkHandle, buf, &addr)
@@ -465,7 +483,6 @@ func (s *WindowsService) networkLoop() {
 				atomic.AddUint64(&s.reverseReflected, 1)
 				atomic.AddUint64(&s.packetCount, 1)
 				atomic.AddUint64(&s.byteCount, uint64(len(buf)))
-				s.logf("reverse reflect injected redirect-port=%d -> local=%s:%d remote=%s:%d ifidx=%d subifidx=%d", conn.redirectPort, conn.localAddr, conn.localPort, conn.remoteAddr, conn.remotePort, conn.ifIdx, conn.subIfIdx)
 			}
 			continue
 		}
@@ -493,7 +510,6 @@ func (s *WindowsService) networkLoop() {
 				atomic.AddUint64(&s.forwardReflected, 1)
 				atomic.AddUint64(&s.packetCount, 1)
 				atomic.AddUint64(&s.byteCount, uint64(len(buf)))
-				s.logf("forward reflect injected local=%s:%d -> remote=%s:%d via redirect-port=%d ifidx=%d subifidx=%d", conn.localAddr, conn.localPort, conn.remoteAddr, conn.remotePort, conn.redirectPort, conn.ifIdx, conn.subIfIdx)
 			}
 			continue
 		}
@@ -518,7 +534,7 @@ func (s *WindowsService) reaperLoop() {
 	}
 }
 
-func (s *WindowsService) registerConnection(proc processInfo, query string, localIP net.IP, localPort uint16, remoteIP net.IP, remotePort uint16) error {
+func (s *WindowsService) registerConnection(proc processInfo, query string, profile resolvedTunAppProfile, localIP net.IP, localPort uint16, remoteIP net.IP, remotePort uint16) error {
 	listener, err := net.Listen("tcp4", "0.0.0.0:0")
 	if err != nil {
 		return err
@@ -533,6 +549,10 @@ func (s *WindowsService) registerConnection(proc processInfo, query string, loca
 		processID:    proc.pid,
 		processName:  proc.name,
 		processPath:  proc.path,
+		query:        query,
+		profileID:    profile.ID,
+		profileName:  profile.Name,
+		routingMode:  profile.RoutingMode,
 		ifIdx:        interfaceIndexForIP(localIP),
 		localAddr:    append(net.IP(nil), localIP...),
 		localPort:    localPort,
@@ -611,22 +631,53 @@ func (s *WindowsService) serveReflectedConnection(rc *redirectConnection) {
 	s.logf("reflected connection accepted pid=%d proc=%s remote=%s:%d", rc.processID, rc.processPath, rc.remoteAddr, rc.remotePort)
 	s.persistRuntimeSnapshot()
 
+	prefix, sniffErr := captureInitialPayload(appConn, 16*1024, 1200*time.Millisecond)
+	if sniffErr != nil && !errors.Is(sniffErr, io.EOF) {
+		s.logf("capture initial payload failed pid=%d remote=%s:%d: %v", rc.processID, rc.remoteAddr, rc.remotePort, sniffErr)
+	}
+	host, source := detectHostFromInitialPayload(prefix)
+	decision := decideAppRoute(host, rc.remoteAddr, s.options.Rules, rc.routingMode)
+	s.logf(
+		"app route decided pid=%d profile=%s proc=%s remote=%s:%d sniff-host=%q sniff-source=%s basis=%s matched=%s,%s target=%s mode=%s",
+		rc.processID,
+		rc.profileName,
+		rc.processName,
+		rc.remoteAddr,
+		rc.remotePort,
+		host,
+		source,
+		decision.Basis,
+		decision.Matched.Type,
+		decision.Matched.Value,
+		decision.Rule.Target,
+		rc.routingMode,
+	)
+	if decision.Rule.Target == model.RuleTargetReject {
+		s.logf("connection rejected pid=%d proc=%s remote=%s:%d matched=%s,%s", rc.processID, rc.processName, rc.remoteAddr, rc.remotePort, decision.Matched.Type, decision.Matched.Value)
+		return
+	}
+
 	upstreamCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	upstreamConn, err := s.dialUpstream(upstreamCtx, net.JoinHostPort(rc.remoteAddr.String(), fmt.Sprintf("%d", rc.remotePort)))
+	upstreamConn, err := s.dialByTarget(upstreamCtx, decision.Rule.Target, net.JoinHostPort(rc.remoteAddr.String(), fmt.Sprintf("%d", rc.remotePort)))
 	if err != nil {
 		atomic.AddUint64(&s.upstreamDialFailed, 1)
 		s.recordUpstreamError(err)
-		s.logf("dial upstream failed for %s:%d: %v", rc.remoteAddr, rc.remotePort, err)
+		s.logf("dial target failed for %s:%d target=%s: %v", rc.remoteAddr, rc.remotePort, decision.Rule.Target, err)
 		s.persistRuntimeSnapshot()
 		return
 	}
 	defer upstreamConn.Close()
 
 	atomic.AddUint64(&s.tunnelEstablished, 1)
-	s.logf("transparent tunnel established pid=%d %s -> %s:%d", rc.processID, rc.processName, rc.remoteAddr, rc.remotePort)
+	s.logf("transparent tunnel established pid=%d %s -> %s:%d target=%s", rc.processID, rc.processName, rc.remoteAddr, rc.remotePort, decision.Rule.Target)
 	s.persistRuntimeSnapshot()
-	pipe := func(dst, src net.Conn) {
+	pipe := func(dst net.Conn, prefix []byte, src net.Conn) {
+		if len(prefix) > 0 {
+			if _, err := dst.Write(prefix); err != nil {
+				return
+			}
+		}
 		_, _ = io.Copy(dst, src)
 		if tcpConn, ok := dst.(*net.TCPConn); ok {
 			_ = tcpConn.CloseWrite()
@@ -638,16 +689,52 @@ func (s *WindowsService) serveReflectedConnection(rc *redirectConnection) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		pipe(upstreamConn, appConn)
+		pipe(upstreamConn, prefix, appConn)
 	}()
 	go func() {
 		defer wg.Done()
-		pipe(appConn, upstreamConn)
+		pipe(appConn, nil, upstreamConn)
 	}()
 	wg.Wait()
 	time.AfterFunc(15*time.Second, func() {
 		s.unregisterConnection(rc.localPort)
 	})
+}
+
+func captureInitialPayload(conn net.Conn, limit int, timeout time.Duration) ([]byte, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return nil, err
+	}
+	defer conn.SetReadDeadline(time.Time{})
+
+	buf := make([]byte, 0, limit)
+	tmp := make([]byte, 4096)
+	for len(buf) < limit {
+		chunk := tmp
+		if remain := limit - len(buf); remain < len(chunk) {
+			chunk = chunk[:remain]
+		}
+		n, err := conn.Read(chunk)
+		if n > 0 {
+			buf = append(buf, chunk[:n]...)
+			if host, _ := detectHostFromInitialPayload(buf); host != "" {
+				return buf, nil
+			}
+		}
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				return buf, nil
+			}
+			if errors.Is(err, io.EOF) {
+				return buf, err
+			}
+			return buf, err
+		}
+	}
+	return buf, nil
 }
 
 func (s *WindowsService) dialUpstream(ctx context.Context, destination string) (net.Conn, error) {
@@ -695,6 +782,38 @@ func (s *WindowsService) dialUpstream(ctx context.Context, destination string) (
 	default:
 		return nil, fmt.Errorf("unsupported upstream type: %s", upstreamType)
 	}
+}
+
+func (s *WindowsService) dialByTarget(ctx context.Context, target model.RuleTarget, destination string) (net.Conn, error) {
+	if target == model.RuleTargetDirect {
+		dialer, err := s.buildDirectDialer()
+		if err != nil {
+			return nil, err
+		}
+		return dialer.DialContext(ctx, "tcp", destination)
+	}
+	return s.dialUpstream(ctx, destination)
+}
+
+func (s *WindowsService) buildDirectDialer() (*net.Dialer, error) {
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	iface := strings.TrimSpace(s.options.DirectInterface)
+	if iface == "" {
+		return dialer, nil
+	}
+	ip, err := netadapter.LookupIPv4(iface)
+	if err != nil {
+		fallbackIP, _, fallbackErr := netadapter.LookupFallbackIPv4(iface)
+		if fallbackErr != nil {
+			return nil, err
+		}
+		ip = fallbackIP
+	}
+	dialer.LocalAddr = &net.TCPAddr{IP: ip}
+	return dialer, nil
 }
 
 func writeHTTPConnect(conn net.Conn, destination string) error {
@@ -884,6 +1003,58 @@ func normalizeApps(values []string) []string {
 	return out
 }
 
+func resolveTunAppProfiles(profiles []model.TunAppProfile, includedApps []string) []resolvedTunAppProfile {
+	if len(profiles) == 0 {
+		queries := normalizeApps(includedApps)
+		if len(queries) == 0 {
+			return nil
+		}
+		return []resolvedTunAppProfile{{
+			Name:        "Legacy Applications",
+			RoutingMode: model.TunAppRoutingRulesProxyFallback,
+			Queries:     queries,
+		}}
+	}
+
+	out := make([]resolvedTunAppProfile, 0, len(profiles))
+	for _, profile := range profiles {
+		queries := normalizeApps(profile.Queries)
+		if len(queries) == 0 || !profile.Enabled {
+			continue
+		}
+		mode := profile.RoutingMode
+		if mode == "" {
+			mode = model.TunAppRoutingRulesProxyFallback
+		}
+		out = append(out, resolvedTunAppProfile{
+			ID:          strings.TrimSpace(profile.ID),
+			Name:        strings.TrimSpace(profile.Name),
+			RoutingMode: mode,
+			Remark:      strings.TrimSpace(profile.Remark),
+			Queries:     queries,
+		})
+	}
+	return out
+}
+
+func flattenResolvedTunQueries(profiles []resolvedTunAppProfile) []string {
+	values := make([]string, 0, len(profiles)*2)
+	for _, profile := range profiles {
+		values = append(values, profile.Queries...)
+	}
+	return normalizeApps(values)
+}
+
+func buildResolvedTunQueryMap(profiles []resolvedTunAppProfile) map[string]resolvedTunAppProfile {
+	out := make(map[string]resolvedTunAppProfile, len(profiles)*2)
+	for _, profile := range profiles {
+		for _, query := range profile.Queries {
+			out[strings.ToLower(strings.TrimSpace(query))] = profile
+		}
+	}
+	return out
+}
+
 func baseName(path string) string {
 	path = strings.ReplaceAll(path, "/", "\\")
 	idx := strings.LastIndex(path, "\\")
@@ -1062,6 +1233,19 @@ func (s *WindowsService) currentQueries() []string {
 	out := make([]string, len(s.queries))
 	copy(out, s.queries)
 	return out
+}
+
+func (s *WindowsService) profileForQuery(query string) resolvedTunAppProfile {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if profile, ok := s.queryMap[strings.ToLower(strings.TrimSpace(query))]; ok {
+		return profile
+	}
+	return resolvedTunAppProfile{
+		Name:        query,
+		RoutingMode: model.TunAppRoutingRulesProxyFallback,
+		Queries:     []string{query},
+	}
 }
 
 func (s *WindowsService) ensureUDPBlock(processPath string) error {

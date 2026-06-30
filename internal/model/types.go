@@ -113,6 +113,7 @@ type AppConfig struct {
 	TunInterfaceName            string              `json:"tunInterfaceName"`
 	TunAddressCIDR              string              `json:"tunAddressCidr"`
 	TunMTU                      int                 `json:"tunMtu"`
+	TunAppProfiles              []TunAppProfile     `json:"tunAppProfiles"`
 	TunIncludedApps             []string            `json:"tunIncludedApps"`
 	AutoStartTunService         bool                `json:"autoStartTunService"`
 	AutoStartPacService         bool                `json:"autoStartPacService"`
@@ -121,6 +122,24 @@ type AppConfig struct {
 	DisableSystemPacOnExit      bool                `json:"disableSystemPacOnExit"`
 	MaxLogEntries               int                 `json:"maxLogEntries"`
 	SavedWindowsProxy           *WindowsProxyConfig `json:"savedWindowsProxyConfig"`
+}
+
+type TunAppRoutingMode string
+
+const (
+	TunAppRoutingRulesProxyFallback  TunAppRoutingMode = "RULES_PROXY_FALLBACK"
+	TunAppRoutingRulesDirectFallback TunAppRoutingMode = "RULES_DIRECT_FALLBACK"
+	TunAppRoutingForceProxy          TunAppRoutingMode = "FORCE_PROXY"
+	TunAppRoutingForceDirect         TunAppRoutingMode = "FORCE_DIRECT"
+)
+
+type TunAppProfile struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Enabled     bool              `json:"enabled"`
+	Queries     []string          `json:"queries"`
+	RoutingMode TunAppRoutingMode `json:"routingMode"`
+	Remark      string            `json:"remark"`
 }
 
 type ManagedAppStatus struct {
