@@ -55,6 +55,21 @@ const appPresets: AppPreset[] = [
     },
     description: "监控 Steam 主进程和 Web Helper，但默认不把游戏下载流量送入透明接管数据面。",
   },
+  {
+    id: "steam-games-auto",
+    label: "Steam Games Auto",
+    category: "游戏平台",
+    profile: {
+      id: "",
+      name: "Steam Games Auto",
+      enabled: true,
+      queries: ["steam-library-games:"],
+      routingMode: "FORCE_DIRECT",
+      bypassTransparentProxy: true,
+      remark: "自动识别 Steam 库目录 steamapps/common 下的游戏进程，默认直连，避免影响成就、Overlay 和游戏联网。",
+    },
+    description: "自动识别 Steam 库目录 steamapps/common 下的游戏进程，默认直连，避免影响成就、Overlay 和游戏联网。",
+  },
 ];
 
 const defaultTunAppProfiles: TunAppProfile[] = [

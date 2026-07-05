@@ -26,6 +26,7 @@ import (
 	"proxy-rule-manager/internal/model"
 	"proxy-rule-manager/internal/netadapter"
 	"proxy-rule-manager/internal/prmfs"
+	"proxy-rule-manager/internal/procmatch"
 	"proxy-rule-manager/internal/winps"
 )
 
@@ -424,7 +425,7 @@ func (s *WindowsService) socketLoop() {
 
 		switch event {
 		case windivertEventSocketConnect:
-			query, ok := matchProcessQuery(proc, s.currentQueries())
+			query, ok := procmatch.MatchProcess(proc.name, proc.path, s.currentQueries())
 			if !ok {
 				if trackedProcess {
 					s.logf("socket connect ignored pid=%d proc=%s local=%s:%d remote=%s:%d queries=%v", proc.pid, proc.path, localIP, socket.LocalPort, remoteIP, socket.RemotePort, s.currentQueries())
@@ -1037,50 +1038,7 @@ func queryProcessPath(pid uint32) string {
 }
 
 func matchProcessQuery(proc processInfo, queries []string) (string, bool) {
-	name := strings.ToLower(strings.TrimSpace(proc.name))
-	path := strings.ToLower(strings.TrimSpace(proc.path))
-	for _, raw := range queries {
-		query := strings.ToLower(strings.TrimSpace(raw))
-		if query == "" {
-			continue
-		}
-		if strings.ContainsAny(query, "*?") {
-			if matchesProcessPattern(query, name, path) {
-				return raw, true
-			}
-			continue
-		}
-		if strings.Contains(query, "\\") || strings.Contains(query, "/") || strings.Contains(query, ":") {
-			if path != "" && (path == query || strings.HasSuffix(path, query)) {
-				return raw, true
-			}
-			if strings.HasSuffix(name, strings.ToLower(baseName(query))) {
-				return raw, true
-			}
-			continue
-		}
-		if name == query {
-			return raw, true
-		}
-	}
-	return "", false
-}
-
-func matchesProcessPattern(pattern, name, path string) bool {
-	pattern = strings.ReplaceAll(pattern, "/", "\\")
-	path = strings.ReplaceAll(path, "/", "\\")
-	if ok, _ := filepath.Match(pattern, name); ok {
-		return true
-	}
-	if path != "" {
-		if ok, _ := filepath.Match(pattern, path); ok {
-			return true
-		}
-		if ok, _ := filepath.Match(baseName(pattern), name); ok {
-			return true
-		}
-	}
-	return false
+	return procmatch.MatchProcess(proc.name, proc.path, queries)
 }
 
 func normalizeApps(values []string) []string {

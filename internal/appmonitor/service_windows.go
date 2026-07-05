@@ -5,7 +5,6 @@ package appmonitor
 import (
 	"fmt"
 	"net"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -16,6 +15,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"proxy-rule-manager/internal/model"
+	"proxy-rule-manager/internal/procmatch"
 )
 
 var (
@@ -406,7 +406,7 @@ func matchProcesses(queries []string, processes map[uint32]processInfo) (map[uin
 	matchedApps := map[uint32]model.ManagedAppStatus{}
 	pidLookup := map[uint32]processInfo{}
 	for _, proc := range processes {
-		query, ok := matchProcessQuery(proc, queries)
+		query, ok := procmatch.MatchProcess(proc.name, proc.path, queries)
 		if !ok {
 			continue
 		}
@@ -424,50 +424,7 @@ func matchProcesses(queries []string, processes map[uint32]processInfo) (map[uin
 }
 
 func matchProcessQuery(proc processInfo, queries []string) (string, bool) {
-	name := strings.ToLower(strings.TrimSpace(proc.name))
-	path := strings.ToLower(strings.TrimSpace(proc.path))
-	for _, raw := range queries {
-		query := strings.ToLower(strings.TrimSpace(raw))
-		if query == "" {
-			continue
-		}
-		if strings.ContainsAny(query, "*?") {
-			if matchesProcessPattern(query, name, path) {
-				return raw, true
-			}
-			continue
-		}
-		if strings.Contains(query, "\\") || strings.Contains(query, "/") || strings.Contains(query, ":") {
-			if path != "" && (path == query || strings.HasSuffix(path, query)) {
-				return raw, true
-			}
-			if strings.HasSuffix(name, strings.ToLower(baseName(query))) {
-				return raw, true
-			}
-			continue
-		}
-		if name == query {
-			return raw, true
-		}
-	}
-	return "", false
-}
-
-func matchesProcessPattern(pattern, name, path string) bool {
-	pattern = strings.ReplaceAll(pattern, "/", "\\")
-	path = strings.ReplaceAll(path, "/", "\\")
-	if ok, _ := filepath.Match(pattern, name); ok {
-		return true
-	}
-	if path != "" {
-		if ok, _ := filepath.Match(pattern, path); ok {
-			return true
-		}
-		if ok, _ := filepath.Match(baseName(pattern), name); ok {
-			return true
-		}
-	}
-	return false
+	return procmatch.MatchProcess(proc.name, proc.path, queries)
 }
 
 func collapseManagedApps(queries []string, matched map[uint32]model.ManagedAppStatus) []model.ManagedAppStatus {
