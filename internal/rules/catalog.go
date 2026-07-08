@@ -90,13 +90,16 @@ var commonDomainFamilies = []DomainFamily{
 	{
 		Key:    "steam",
 		Folder: "游戏平台 / Steam",
-		Remark: "Steam 商店、社区与帮助中心域名",
+		Remark: "Steam 商店、社区、账号与客户端 Web 域名；下载 CDN 仍保持兜底直连",
 		Domains: []string{
+			"steampowered.com",
 			"steamcommunity.com",
+			"steam-chat.com",
+			"steamusercontent.com",
+			"steamstatic.com",
 			"store.steampowered.com",
 			"help.steampowered.com",
 			"api.steampowered.com",
-			"steamstatic.com",
 		},
 	},
 }
