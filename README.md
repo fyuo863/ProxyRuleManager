@@ -65,11 +65,11 @@ PAC 只能告诉浏览器“把流量发给哪个代理”，但它本身不会�
 - `Anthropic`：`anthropic.com`、`claude.ai`
 - `Perplexity`：`perplexity.ai`、`pplx.ai`
 - `xAI`：`x.ai`、`grok.com`
-- `Steam`：`steamcommunity.com`、`store.steampowered.com`、`help.steampowered.com`、`api.steampowered.com`、`steamstatic.com`
+- `Steam`：`steampowered.com`、`steamcommunity.com`、`steam-chat.com`、`steamusercontent.com`、`steamstatic.com`、`store.steampowered.com`、`help.steampowered.com`、`api.steampowered.com`
 - `Microsoft 连通性`：`msftconnecttest.com`、`cloudmessaging.edge.microsoft.com`
 - `MATCH -> DIRECT`
 
-其中 `MATCH,DIRECT` 会始终保留在最后一条，作为兜底规则。
+其中 `MATCH,DIRECT` 会始终保留在最后一条，作为兜底规则。Steam 下载 CDN（例如 SteamPipe 内容分发域名）不在内置 `Steam` 代理域名里，会继续落到 `MATCH,DIRECT`。
 
 ## 默认透明接管应用名单
 
@@ -81,7 +81,7 @@ PAC 只能告诉浏览器“把流量发给哪个代理”，但它本身不会�
 
 这组默认值会覆盖 Codex 桌面主进程、CLI 子进程和带版本号的命令执行子进程。
 
-如果你需要接管其他桌面应用，例如 `Steam`，推荐直接在设置页的“透明接管应用名单”里通过分类下拉选择预设，再点“加入名单”。
+如果你需要接管其他桌面应用，例如 `Steam`，推荐直接在设置页的“透明接管应用名单”里通过分类下拉选择预设，再点“加入名单”。Steam 预设是监控优先的安全预设：默认绕过透明接管数据面，避免破坏成就、Overlay、好友、云存档和游戏联网。
 
 ## 开发环境
 
@@ -192,7 +192,7 @@ wails build
 1. 启动程序。
 2. 以管理员身份运行。
 3. 在“系统设置 -> 透明接管应用名单”里配置要接管的进程名或路径。
-4. 可直接从分类下拉中选择 `Codex Desktop` 或 `Steam Desktop`，点“加入名单”。
+4. 可直接从分类下拉中选择 `Codex Desktop`、`Steam Desktop` 或 `Steam Games Auto`，点“加入名单”。
 5. 保存设置。
 6. 点击“启动应用透明接管”。
 7. 保持上游代理可用，例如 `127.0.0.1:7892`。
@@ -202,163 +202,20 @@ wails build
 
 如果你的目标是：
 
-- `Steam 商店 / 社区 -> 走代理`
-- `Steam 下载游戏 -> 走直连`
+- `Steam 商店 / 社区 / 登录 / 聊天 / 客户端 Web API -> 走代理`
+- `Steam 下载游戏 / 游戏进程 / 成就 / Overlay / 云存档 / 好友与游戏联网 -> 不进入透明接管，按系统默认路由或 Steam 自身机制工作`
 
 推荐这样配置：
 
-1. 在透明接管应用名单里加入 `Steam Desktop` 预设。
+1. 启动 `PAC 服务`、`本地分流代理`，并启用 `系统 PAC`。
 2. 保留内置 `Steam` 域名规则为 `PROXY`。
 3. 保持最后的 `MATCH,DIRECT` 兜底规则。
+4. 如需在应用列表里看到 Steam 连接，可加入 `Steam Desktop` 和 `Steam Games Auto` 预设；这两个预设默认绕过透明接管数据面，只做安全监控。
 
 这时：
 
-- 命中 `steamcommunity.com`、`store.steampowered.com`、`help.steampowered.com`、`api.steampowered.com`、`steamstatic.com` 的连接会走代理。
-- 未命中这些域名的其余 Steam TCP 连接会优先按现有规则继续判断，最后默认落到 `DIRECT`。
+- 命中 `steampowered.com`、`steamcommunity.com`、`steam-chat.com`、`steamusercontent.com`、`steamstatic.com` 等 Steam Web/账号/社区域名的连接会走代理。
+- Steam 下载 CDN 和其它未命中的连接会落到 `MATCH,DIRECT`，继续走默认直连出口，适合用有线网下载游戏。
+- Steam 客户端和 `steamapps/common` 下的游戏进程不会被透明接管，也不会被 PRM 添加 UDP 阻断规则，从而避免影响 Steam 成就、Overlay、云存档和游戏联网。
 
 ## 验证方法
-
-访问 `chat.openai.com` 后，实时日志应出现类似：
-
-```text
-chat.openai.com -> PROXY
-```
-
-访问 `bilibili.com` 后，实时日志应出现类似：
-
-```text
-bilibili.com -> DIRECT
-```
-
-访问 `douyin.com` 后，实时日志应出现类似：
-
-```text
-douyin.com -> DIRECT
-```
-
-接管 `Steam` 后，访问社区页或商店页时，日志应出现类似：
-
-```text
-steamcommunity.com -> PROXY
-store.steampowered.com -> PROXY
-```
-
-如果命中的是非内置 Steam 社区/商店域名，且未单独配置为 `PROXY`，则会继续落到当前规则结果，通常是：
-
-```text
-<download-or-cdn-host> -> DIRECT
-```
-
-## 浏览器没有进入本程序时如何排查
-
-- 确认系统 PAC 已启用
-- 确认浏览器使用系统代理
-- 可尝试关闭浏览器 QUIC / HTTP3
-- 确认本地分流代理 `127.0.0.1:18089` 正在运行
-- 确认 PAC 地址 `http://127.0.0.1:18088/proxy.pac` 可以访问
-
-## 配置文件
-
-默认路径：
-
-```text
-%USERPROFILE%/.PRM/config.json
-```
-
-配置内容包括：
-
-- `rules`
-- `pacListenAddr`
-- `proxyListenAddr`
-- `upstreamProxyAddr`
-- `upstreamProxyType`
-- `proxyInterfaceName`
-- `upstreamProxyRouteEnabled`
-- `upstreamProxyRouteInterface`
-- `upstreamProxyRouteTargets`
-- `proxyGuardEnabled`
-- `proxyGuardInterface`
-- `proxyGuardProgramPaths`
-- `directInterfaceName`
-- `tunInterfaceName`
-- `tunAddressCidr`
-- `tunMtu`
-- `tunIncludedApps`
-- `autoStartTunService`
-- `autoStartPacService`
-- `autoStartProxyService`
-- `autoEnableSystemPac`
-- `disableSystemPacOnExit`
-- `maxLogEntries`
-- `savedWindowsProxyConfig`
-
-## 应用透明接管的工作方式
-
-当前透明接管链路是：
-
-1. WinDivert 在 Windows 上按进程拦截指定应用的 TCP 连接。
-2. 程序读取应用首包，优先尝试识别：
-   - `TLS ClientHello` 里的 `SNI`
-   - 明文 HTTP 请求里的 `Host`
-3. 如果识别到主机名，就复用现有规则引擎决定 `PROXY / DIRECT / REJECT`。
-4. 如果没有识别到主机名，会尝试按目标 IP 命中 `IP-CIDR`。
-5. 如果仍然无法匹配，为了尽量避免应用“无代理即不可用”，当前会回退到 `PROXY`。
-
-这意味着它非常适合：
-
-- `Steam` 这类“同一个桌面进程里既有社区/商店，又有下载流量”的场景
-- `Codex Desktop`、Electron、浏览器辅助进程等 TCP 为主的应用
-
-## 限制说明
-
-- `WEB` 链路只处理走系统代理/PAC 的流量
-- `APP` 链路当前只透明接管 TCP，不直接转发 UDP / QUIC / HTTP3
-- 对已识别到实际路径的目标进程，程序会额外下发 UDP 出站阻断规则，尽量压住 QUIC/UDP 旁路，但不等于完整 UDP 代理
-- 应用透明接管需要管理员权限
-- 若应用首包里既没有可识别的 `TLS SNI`，也没有可识别的明文 HTTP `Host`，当前会回退走代理
-- `IP-CIDR` 只对“host 本身就是 IP”时生效，当前不会主动解析域名再做 CIDR 匹配
-- HTTPS 日志只记录 CONNECT 级别信息，不记录解密后的 URL 路径
-
-## 是否能管理应用流量，例如 Codex / Steam
-
-可以，而且现在有两条路径：
-
-- `WEB`：如果应用本身愿意走 Windows 系统代理或系统 PAC，它会像浏览器一样进入本地分流代理。
-- `APP`：如果应用不走系统代理，但你把它加入“透明接管应用名单”，程序会按进程在 Windows 上直接接管它的 TCP 连接。
-
-对 `Codex`：
-
-- 默认透明接管应用名单已经覆盖 `Codex.exe`、`codex.exe`、`codex-command-runner-*.exe`
-- 即使它的某些子进程不走系统 PAC，也可以通过应用透明接管进入分流链路
-
-对 `Steam`：
-
-- 推荐通过设置页预设把 `steam.exe`、`steamwebhelper.exe` 加入透明接管应用名单
-- 社区/商店相关域名默认已经内置为 `PROXY`
-- 下载流量若未命中这些站点，会继续按规则落到 `DIRECT`
-
-仍然要注意：
-
-- 非 TCP 协议、强自定义加密握手、纯 UDP/QUIC 应用不一定能被完整管理
-- 某些没有 `SNI`、也没有明文 `Host` 的连接，当前只能回退到代理或靠 `IP-CIDR` 规则处理
-
-## 项目结构
-
-```text
-.
-├─ app.go
-├─ main.go
-├─ go.mod
-├─ internal/
-│  ├─ config/
-│  ├─ logs/
-│  ├─ model/
-│  ├─ pac/
-│  ├─ proxy/
-│  ├─ rules/
-│  └─ winproxy/
-└─ frontend/
-   ├─ src/
-   ├─ package.json
-   └─ vite.config.ts
-```
